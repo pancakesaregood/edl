@@ -1,0 +1,16 @@
+﻿# OS / editor noise
+Thumbs.db
+.DS_Store
+.vscode/
+
+# Local scratch artifacts
+*.tmp
+*.bak
+*.orig
+*.log
+
+# Lock files are transient runtime state
+locks/*.lock.json
+
+# Optional local publish target (generated outside controlled release tree)
+published/
