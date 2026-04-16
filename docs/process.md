@@ -32,6 +32,16 @@ These list files are the controlled set currently maintained in this GitLab repo
 - `edl/releases/*`: generated artifacts only, never hand-edited.
 - `locks`: transient lock metadata created by scripts.
 
+## Per-File Type Enforcement
+
+- Every `.txt` list has exactly one expected entry type.
+- Type map file: `edl/list-types.json`.
+- `validate.ps1` uses this map by default.
+- URL list types support pattern syntax:
+  - `*` wildcard matching
+  - `/` anchored path matching
+  - example: `*.example.invalid/path/*`
+
 ## Lock File Behavior
 
 `checkout.ps1` creates `locks/<file>.lock.json` with:
@@ -122,6 +132,9 @@ Example:
 # Validate one file
 ./scripts/validate.ps1 -Path edl/working/ip_blocklist.txt -IgnoreComments
 
+# Validate URL pattern list with wildcard and anchored path entries
+./scripts/validate.ps1 -Path edl/working/url_blocklist.txt -IgnoreComments
+
 # Validate all working + approved files
 ./scripts/validate.ps1 -All -IgnoreComments
 
@@ -140,8 +153,8 @@ Example:
 
 Examples:
 
-- `feature/CHG-1234-phishing-refresh`
-- `feature/INC-2201-vendor-allowlist-fix`
+- `feature/CHG-1234-domainblocklist-refresh`
+- `feature/INC-2201-ip-blocklist-fix`
 - `release/release-20260416-190000`
 
 ## Merge Request Checklist (GitLab Example)
@@ -164,7 +177,7 @@ Format:
 
 Examples:
 
-- `feat(edl): CHG-1234 refresh phishing blocklist`
-- `fix(edl): INC-2201 remove duplicate vendor domain`
-- `promote(edl): CHG-1234 approve malware list update`
+- `feat(edl): CHG-1234 refresh domainblocklist`
+- `fix(edl): INC-2201 remove duplicate ip_blocklist entry`
+- `promote(edl): CHG-1234 approve url_blocklist update`
 - `release(edl): REL-20260416 build release-20260416-190000`

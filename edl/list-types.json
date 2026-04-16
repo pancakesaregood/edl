@@ -1,0 +1,14 @@
+﻿{
+  "default_entry_type": "Auto",
+  "files": {
+    "Corp_url_whitelist.txt": "UrlPattern",
+    "domainblocklist.txt": "Domain",
+    "greenspace.txt": "Domain",
+    "internet_only_whitelist.txt": "Domain",
+    "ipset_blocklist.txt": "IpOrCidr",
+    "skype_teams.txt": "Domain",
+    "nodescrypt.txt": "Domain",
+    "ip_blocklist.txt": "IpOrCidr",
+    "url_blocklist.txt": "UrlPattern"
+  }
+}

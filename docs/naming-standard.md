@@ -33,7 +33,7 @@ Where:
 - `entry-type` (optional but recommended):
   - `ip` for IP/CIDR entries
   - `domain` for FQDN/domain entries
-  - `url` for URL entries
+  - `url` for URL pattern entries
 
 Examples:
 
@@ -44,7 +44,8 @@ Examples:
 
 ## Character Rules
 
-- Lowercase letters, numbers, and hyphens only.
+- Current fixed list IDs must be kept exactly as-is for compatibility.
+- For new list names, prefer lowercase letters, numbers, and hyphens.
 - No spaces.
 - Use `.txt` extension.
 - Keep names short but descriptive.
@@ -52,12 +53,14 @@ Examples:
 ## Entry Content Expectations
 
 Each line is one entry. Blank lines are allowed. Comments may be included using `#` at line start.
+Each list file should contain one entry type only.
+Type assignment is controlled by `edl/list-types.json`.
 
 Supported entry formats:
 
 - IP or CIDR: `203.0.113.0/24`, `198.51.100.10`
 - Domain/FQDN: `service.example.invalid`
-- URL: `https://updates.example.invalid/feed`
+- URL Pattern: `*.example.invalid/path/*`, `portal.example.invalid/`
 
 ## Folder Usage
 

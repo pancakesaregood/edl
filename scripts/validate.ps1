@@ -6,8 +6,10 @@ param(
     [Parameter(ParameterSetName = 'All', Mandatory = $true)]
     [switch]$All,
 
-    [ValidateSet('Auto', 'IpOrCidr', 'Domain', 'Url')]
+    [ValidateSet('Auto', 'IpOrCidr', 'Domain', 'Url', 'UrlPattern')]
     [string]$EntryType = 'Auto',
+
+    [string]$TypeConfigPath = 'edl/list-types.json',
 
     [switch]$IgnoreComments
 )
@@ -40,7 +42,7 @@ function Get-RelativePathNormalized {
     $relativeUri = $baseUri.MakeRelativeUri($targetUri)
     $relative = [System.Uri]::UnescapeDataString($relativeUri.ToString())
 
-    return $relative.Replace('\', '/')
+    return $relative.Replace('\\', '/')
 }
 
 function Resolve-InputFile {
@@ -85,6 +87,85 @@ function Get-DefaultEdlFiles {
     }
 
     return $files
+}
+
+function Normalize-EntryTypeName {
+    param(
+        [Parameter(Mandatory = $true)]
+        [string]$TypeName
+    )
+
+    switch ($TypeName.ToLowerInvariant()) {
+        'auto'       { return 'Auto' }
+        'iporcidr'   { return 'IpOrCidr' }
+        'ip'         { return 'IpOrCidr' }
+        'cidr'       { return 'IpOrCidr' }
+        'domain'     { return 'Domain' }
+        'fqdn'       { return 'Domain' }
+        'url'        { return 'Url' }
+        'urlpattern' { return 'UrlPattern' }
+        default {
+            throw "Unsupported entry type '$TypeName'. Expected Auto, IpOrCidr, Domain, Url, or UrlPattern."
+        }
+    }
+}
+
+function Resolve-TypeConfigPath {
+    param(
+        [Parameter(Mandatory = $true)]
+        [string]$RepoRoot,
+        [Parameter(Mandatory = $true)]
+        [string]$InputPath
+    )
+
+    if ([string]::IsNullOrWhiteSpace($InputPath)) {
+        return $null
+    }
+
+    if ([System.IO.Path]::IsPathRooted($InputPath)) {
+        return $InputPath
+    }
+
+    return (Join-Path $RepoRoot $InputPath)
+}
+
+function Get-TypeConfiguration {
+    param(
+        [Parameter(Mandatory = $true)]
+        [string]$RepoRoot,
+        [Parameter(Mandatory = $true)]
+        [string]$ConfigPathInput
+    )
+
+    $resolvedPath = Resolve-TypeConfigPath -RepoRoot $RepoRoot -InputPath $ConfigPathInput
+
+    $config = @{
+        is_loaded    = $false
+        path         = $resolvedPath
+        default_type = 'Auto'
+        file_map     = @{}
+    }
+
+    if ([string]::IsNullOrWhiteSpace($resolvedPath) -or -not (Test-Path -LiteralPath $resolvedPath)) {
+        return $config
+    }
+
+    $json = Get-Content -LiteralPath $resolvedPath -Raw | ConvertFrom-Json
+
+    if ($null -ne $json.default_entry_type -and -not [string]::IsNullOrWhiteSpace([string]$json.default_entry_type)) {
+        $config.default_type = Normalize-EntryTypeName -TypeName ([string]$json.default_entry_type)
+    }
+
+    if ($null -ne $json.files) {
+        foreach ($property in $json.files.PSObject.Properties) {
+            $fileName = [string]$property.Name
+            $entryType = Normalize-EntryTypeName -TypeName ([string]$property.Value)
+            $config.file_map[$fileName.ToLowerInvariant()] = $entryType
+        }
+    }
+
+    $config.is_loaded = $true
+    return $config
 }
 
 function Test-IpOrCidr {
@@ -134,7 +215,6 @@ function Test-Domain {
         return $false
     }
 
-    # Basic FQDN validation: requires at least one dot and valid label structure.
     return ($Value -match '^(?=.{1,253}$)(?!-)(?:[A-Za-z0-9](?:[A-Za-z0-9-]{0,61}[A-Za-z0-9])?\.)+[A-Za-z0-9](?:[A-Za-z0-9-]{0,61}[A-Za-z0-9])$')
 }
 
@@ -160,18 +240,81 @@ function Test-Url {
     return $true
 }
 
+function Test-UrlPattern {
+    param(
+        [Parameter(Mandatory = $true)]
+        [string]$Value
+    )
+
+    if ([string]::IsNullOrWhiteSpace($Value)) {
+        return $false
+    }
+
+    if ($Value -match '\s') {
+        return $false
+    }
+
+    # URL pattern supports wildcard '*' and optional anchored path '/...'.
+    if ($Value -notmatch '^(?:(?<scheme>https?)://)?(?<host>[A-Za-z0-9*.-]+)(?<path>/\S*)?$') {
+        return $false
+    }
+
+    $hostPart = $Matches['host']
+    if ([string]::IsNullOrWhiteSpace($hostPart)) {
+        return $false
+    }
+
+    if ($hostPart.StartsWith('.') -or $hostPart.EndsWith('.')) {
+        return $false
+    }
+
+    if ($hostPart.Contains('..')) {
+        return $false
+    }
+
+    if ($hostPart -notmatch '[A-Za-z0-9]') {
+        return $false
+    }
+
+    $labels = $hostPart.Split('.')
+    foreach ($label in $labels) {
+        if ([string]::IsNullOrWhiteSpace($label)) {
+            return $false
+        }
+
+        if ($label -notmatch '^[A-Za-z0-9*-]+$') {
+            return $false
+        }
+    }
+
+    return $true
+}
+
 function Resolve-FileEntryType {
     param(
         [Parameter(Mandatory = $true)]
         [string]$RequestedType,
         [Parameter(Mandatory = $true)]
-        [string]$FilePath
+        [string]$FilePath,
+        [Parameter(Mandatory = $true)]
+        [hashtable]$TypeConfiguration
     )
 
-    if ($RequestedType -ne 'Auto') {
-        return $RequestedType
+    $normalizedRequested = Normalize-EntryTypeName -TypeName $RequestedType
+    if ($normalizedRequested -ne 'Auto') {
+        return $normalizedRequested
     }
 
+    $fileName = [System.IO.Path]::GetFileName($FilePath).ToLowerInvariant()
+    if ($TypeConfiguration.file_map.ContainsKey($fileName)) {
+        return $TypeConfiguration.file_map[$fileName]
+    }
+
+    if ($TypeConfiguration.default_type -ne 'Auto') {
+        return $TypeConfiguration.default_type
+    }
+
+    # Fallback heuristics if file is not in the type map.
     $name = [System.IO.Path]::GetFileNameWithoutExtension($FilePath)
 
     if ($name -match '(^|[-_])(ip|cidr)($|[-_])') {
@@ -183,7 +326,7 @@ function Resolve-FileEntryType {
     }
 
     if ($name -match '(^|[-_])(url|uri)($|[-_])') {
-        return 'Url'
+        return 'UrlPattern'
     }
 
     return 'Auto'
@@ -198,13 +341,15 @@ function Test-Entry {
     )
 
     switch ($EntryType) {
-        'IpOrCidr' { return (Test-IpOrCidr -Value $Value) }
-        'Domain'   { return (Test-Domain -Value $Value) }
-        'Url'      { return (Test-Url -Value $Value) }
+        'IpOrCidr'  { return (Test-IpOrCidr -Value $Value) }
+        'Domain'    { return (Test-Domain -Value $Value) }
+        'Url'       { return (Test-Url -Value $Value) }
+        'UrlPattern'{ return (Test-UrlPattern -Value $Value) }
         default {
             return (
                 (Test-IpOrCidr -Value $Value) -or
                 (Test-Domain -Value $Value) -or
+                (Test-UrlPattern -Value $Value) -or
                 (Test-Url -Value $Value)
             )
         }
@@ -228,10 +373,12 @@ function Validate-File {
         [string]$RepoRoot,
         [Parameter(Mandatory = $true)]
         [string]$RequestedEntryType,
+        [Parameter(Mandatory = $true)]
+        [hashtable]$TypeConfiguration,
         [switch]$IgnoreCommentsEnabled
     )
 
-    $effectiveEntryType = Resolve-FileEntryType -RequestedType $RequestedEntryType -FilePath $FilePath
+    $effectiveEntryType = Resolve-FileEntryType -RequestedType $RequestedEntryType -FilePath $FilePath -TypeConfiguration $TypeConfiguration
     $lines = Get-Content -LiteralPath $FilePath
     $seenEntries = @{}
     $duplicateLines = New-Object System.Collections.Generic.List[string]
@@ -290,6 +437,7 @@ $exitCode = 0
 
 try {
     $repoRoot = Get-RepoRoot
+    $typeConfiguration = Get-TypeConfiguration -RepoRoot $repoRoot -ConfigPathInput $TypeConfigPath
     $targets = @()
 
     if ($All -or [string]::IsNullOrWhiteSpace($Path)) {
@@ -306,7 +454,12 @@ try {
 
     $results = @()
     foreach ($target in $targets) {
-        $results += Validate-File -FilePath $target -RepoRoot $repoRoot -RequestedEntryType $EntryType -IgnoreCommentsEnabled:$IgnoreComments
+        $results += Validate-File -FilePath $target -RepoRoot $repoRoot -RequestedEntryType $EntryType -TypeConfiguration $typeConfiguration -IgnoreCommentsEnabled:$IgnoreComments
+    }
+
+    if ($typeConfiguration.is_loaded) {
+        Write-Host "Type map loaded from $($typeConfiguration.path)"
+        Write-Host ''
     }
 
     foreach ($result in $results) {
@@ -341,7 +494,7 @@ try {
         Write-Host "Validation succeeded for $($results.Count) file(s)."
     }
     else {
-        Write-Error "Validation failed for one or more files."
+        Write-Error 'Validation failed for one or more files.'
     }
 }
 catch {

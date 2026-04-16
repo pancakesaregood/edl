@@ -1,4 +1,4 @@
-﻿# Safe placeholder collaboration service endpoints
+﻿# Safe placeholder collaboration service domains
 teams-gateway.example.invalid
 skype-signaling.example.invalid
-https://media-cdn.example.invalid/teams
+media-cdn.example.invalid

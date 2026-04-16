@@ -1,4 +1,4 @@
-﻿# Safe placeholder URL blocklist entries
-https://malicious-download.example.invalid/payload
-https://credential-harvest.example.invalid/login
-http://bad-redirect.example.invalid/path
+﻿# Safe placeholder URL blocklist patterns
+*.malicious-download.example.invalid/*
+credential-harvest.example.invalid/login/*
+bad-redirect.example.invalid/path/*

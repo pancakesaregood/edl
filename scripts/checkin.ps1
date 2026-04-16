@@ -6,7 +6,7 @@ param(
     [Parameter(Mandatory = $true)]
     [string]$Ticket,
 
-    [ValidateSet('Auto', 'IpOrCidr', 'Domain', 'Url')]
+    [ValidateSet('Auto', 'IpOrCidr', 'Domain', 'Url', 'UrlPattern')]
     [string]$EntryType = 'Auto',
 
     [switch]$IgnoreComments

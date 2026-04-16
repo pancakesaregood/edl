@@ -51,6 +51,15 @@ The following list files are maintained and support checkout/checkin workflow:
 - `ip_blocklist.txt`
 - `url_blocklist.txt`
 
+## Validation Model
+
+- Each list file is validated as a single entry type (one type per file).
+- File-to-type mapping is defined in [`edl/list-types.json`](edl/list-types.json).
+- URL-based lists use URL pattern validation:
+  - `*` is accepted as a wildcard.
+  - `/` is used to anchor path patterns.
+  - Example: `*.corp.example.invalid/apps/*`
+
 ## Script Summary
 
 - `scripts/checkout.ps1`:
