@@ -9,6 +9,14 @@ Thumbs.db
 *.orig
 *.log
 
+# Python local environment and cache
+__pycache__/
+*.pyc
+.venv/
+build/
+dist/
+*.spec
+
 # Lock files are transient runtime state
 locks/*.lock.json
 

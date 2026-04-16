@@ -110,3 +110,140 @@ git push -u origin feature/CHG-1234-domainblocklist-update
 ```
 
 See [docs/process.md](docs/process.md) for full workflow, branch strategy, MR checklist, release process, and reviewer steps.
+
+## Local Windows Desktop Tool
+
+This repo now includes a local Python desktop app for endpoint operators:
+
+- package: `desktop_app`
+- launcher: `launch-edl-desktop.bat`
+- entrypoint: `python -m desktop_app`
+- config: `desktop_app/app_config.json` (default repo path + UI options)
+
+The app is endpoint-local (not a web app) and wraps existing repo scripts and Git commands.
+
+### Features
+
+- Repo path picker and refresh
+- EDL working file browser with search and status
+- Lock-awareness from `locks/*.lock.json`
+- In-app editing for `edl/working/*.txt` only
+- Checkout / Validate / Checkin using existing PowerShell scripts
+- Git branch, changed files, commit, and push helpers
+- Guarded release actions (build/publish) in separate panel
+- Activity log with command stdout/stderr and export option
+
+### Setup (Windows)
+
+```powershell
+# From repo root
+py -3 -m venv .venv
+.\\.venv\\Scripts\\Activate.ps1
+pip install -r requirements.txt
+```
+
+If `ttkbootstrap` is unavailable, the app falls back to standard Tkinter styling.
+
+### Run
+
+```powershell
+# Preferred
+py -3 -m desktop_app
+
+# Or use the launcher
+./launch-edl-desktop.bat
+```
+
+### Packaging (Optional)
+
+You can package the app as a single Windows executable with PyInstaller:
+
+```powershell
+pip install pyinstaller
+pyinstaller --noconfirm --onefile --noconsole --name edl-desktop-tool desktop_app\\__main__.py
+```
+
+Generated executable is typically under `dist/edl-desktop-tool.exe`.
+
+### Desktop Tool Assumptions
+
+- Operator has local access to a checked-out repo clone.
+- Python 3 is installed on the workstation.
+- PowerShell scripts exist in `scripts/` for checkout/checkin/validate (release scripts optional).
+- Git is installed and on `PATH` for branch/commit/push actions.
+- Users edit only files under `edl/working`; approved/release paths are not editable in-app.
+
+## Local Windows Reviewer Tool
+
+This repo also includes a separate reviewer-only desktop app for sign-off:
+
+- package: `reviewer_app`
+- launcher: `launch-edl-reviewer.bat`
+- entrypoint: `python -m reviewer_app`
+- config: `reviewer_app/app_config.json`
+
+The reviewer app focuses on review and approval decisions, not operator editing.
+
+### Reviewer Features
+
+- Open local repo and fetch latest changes
+- Show changed `edl/working/*.txt` files needing review
+- Filter/search changed file list with statuses:
+  - `pending review`
+  - `approved`
+  - `rejected`
+  - `validation failed`
+  - `ready for release`
+- Show lock info if lock file exists
+- Show baseline vs proposed content and unified line diff
+- Re-run validation using `scripts/validate.ps1`
+- Approve / reject with decision safeguards:
+  - approve requires reviewer name, ticket, and passing validation
+  - reject requires reviewer name, ticket, and note
+- Persist reviewer decisions to JSON sign-off artifacts
+- Optional guarded promotion to `edl/approved`
+- Optional guarded release build/publish controls (if scripts exist)
+- Activity log + command details including exact command and stdout/stderr
+
+### Reviewer Sign-Off Artifacts
+
+Decision metadata is stored per file in:
+
+- `review-decisions/<file-key>.json`
+
+Each record contains:
+
+- `filename`
+- `ticket`
+- `decision`
+- `reviewer`
+- `timestamp`
+- `notes`
+- `source_branch`
+- `latest_commit_hash`
+- `base_ref`
+- `validation_ok`
+
+### Reviewer Run
+
+```powershell
+# Preferred
+py -3 -m reviewer_app
+
+# Or launcher
+./launch-edl-reviewer.bat
+```
+
+### Reviewer Packaging (Optional)
+
+```powershell
+pip install pyinstaller
+pyinstaller --noconfirm --onefile --noconsole --name edl-reviewer-tool reviewer_app\\__main__.py
+```
+
+### Reviewer Assumptions and Repo Gaps
+
+- This repo had no formal reviewer sign-off schema before; `review-decisions/*.json` is the lightweight local audit mechanism now used.
+- Decision records are local repo artifacts and should be committed with the review branch for full traceability.
+- Changed-file review scope is derived from Git diff against a base ref (default `origin/main`) plus local working tree changes.
+- The tool does not perform GitLab API calls; it is endpoint-local and Git CLI driven.

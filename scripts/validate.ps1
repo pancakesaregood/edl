@@ -379,7 +379,8 @@ function Validate-File {
     )
 
     $effectiveEntryType = Resolve-FileEntryType -RequestedType $RequestedEntryType -FilePath $FilePath -TypeConfiguration $TypeConfiguration
-    $lines = Get-Content -LiteralPath $FilePath
+    # Normalize to an array so single-line files work under strict mode.
+    $lines = @(Get-Content -LiteralPath $FilePath)
     $seenEntries = @{}
     $duplicateLines = New-Object System.Collections.Generic.List[string]
     $invalidLines = New-Object System.Collections.Generic.List[string]
