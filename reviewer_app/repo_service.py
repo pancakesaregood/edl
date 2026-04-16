@@ -7,6 +7,7 @@ import json
 import os
 import shutil
 import subprocess
+import tempfile
 from pathlib import Path
 
 from .models import CommandResult, LockInfo, ScriptAvailability
@@ -15,6 +16,8 @@ from .models import CommandResult, LockInfo, ScriptAvailability
 class ReviewerRepoService:
     def __init__(self, repo_path: Path) -> None:
         self.repo_path = repo_path.resolve()
+        self._gitlab_username = "oauth2"
+        self._gitlab_token = ""
 
     @property
     def working_dir(self) -> Path:
@@ -67,7 +70,15 @@ class ReviewerRepoService:
         availability.missing = missing
         return availability
 
-    def run_command(self, command: list[str], timeout: int = 180) -> CommandResult:
+    def run_command(
+        self,
+        command: list[str],
+        timeout: int = 180,
+        env_extra: dict[str, str] | None = None,
+    ) -> CommandResult:
+        env = os.environ.copy()
+        if env_extra:
+            env.update(env_extra)
         try:
             completed = subprocess.run(
                 command,
@@ -76,6 +87,7 @@ class ReviewerRepoService:
                 capture_output=True,
                 shell=False,
                 timeout=timeout,
+                env=env,
             )
             return CommandResult(
                 command=command,
@@ -110,6 +122,65 @@ class ReviewerRepoService:
 
     def git_command(self, *args: str) -> CommandResult:
         return self.run_command(["git", *args])
+
+    def set_gitlab_auth(self, username: str, token: str) -> None:
+        self._gitlab_username = username.strip() or "oauth2"
+        self._gitlab_token = token.strip()
+
+    def gitlab_token_configured(self) -> bool:
+        return bool(self._effective_gitlab_token())
+
+    def git_origin_url(self) -> str:
+        result = self.git_command("remote", "get-url", "origin")
+        if result.ok:
+            return result.stdout.strip()
+        return ""
+
+    def git_origin_uses_http(self) -> bool:
+        url = self.git_origin_url().lower()
+        return url.startswith("http://") or url.startswith("https://")
+
+    def _effective_gitlab_token(self) -> str:
+        configured = self._gitlab_token.strip()
+        if configured:
+            return configured
+        return os.environ.get("GITLAB_TOKEN", "").strip()
+
+    def _create_askpass_script(self) -> Path:
+        script_text = (
+            "@echo off\r\n"
+            "setlocal\r\n"
+            "powershell.exe -NoProfile -ExecutionPolicy Bypass -Command "
+            "\"$promptText = $args -join ' '; "
+            "if ($promptText -match '(?i)username') { [Console]::Out.Write($env:GITLAB_AUTH_USERNAME) } "
+            "else { [Console]::Out.Write($env:GITLAB_AUTH_TOKEN) }\" -- %*\r\n"
+        )
+
+        fd, temp_path = tempfile.mkstemp(prefix="edl-git-askpass-", suffix=".cmd")
+        os.close(fd)
+        path = Path(temp_path)
+        path.write_text(script_text, encoding="utf-8")
+        return path
+
+    def _git_network_command(self, *args: str) -> CommandResult:
+        token = self._effective_gitlab_token()
+        env_extra: dict[str, str] = {"GIT_TERMINAL_PROMPT": "0"}
+        askpass_path: Path | None = None
+
+        if token:
+            askpass_path = self._create_askpass_script()
+            env_extra["GIT_ASKPASS"] = str(askpass_path)
+            env_extra["GITLAB_AUTH_USERNAME"] = self._gitlab_username
+            env_extra["GITLAB_AUTH_TOKEN"] = token
+
+        try:
+            return self.run_command(["git", *args], timeout=180, env_extra=env_extra)
+        finally:
+            if askpass_path is not None:
+                try:
+                    askpass_path.unlink(missing_ok=True)
+                except OSError:
+                    pass
 
     def git_available(self) -> bool:
         result = self.git_command("rev-parse", "--is-inside-work-tree")
@@ -158,7 +229,7 @@ class ReviewerRepoService:
         return f"changes: staged={staged}, unstaged={unstaged}, untracked={untracked}"
 
     def fetch_latest(self) -> CommandResult:
-        return self.git_command("fetch", "--all", "--prune")
+        return self._git_network_command("fetch", "--all", "--prune")
 
     def ref_exists(self, ref: str) -> bool:
         result = self.git_command("rev-parse", "--verify", ref)

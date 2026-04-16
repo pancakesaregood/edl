@@ -1,0 +1,4 @@
+﻿# Safe placeholder greenspace domains
+greenspace1.example.invalid
+greenspace2.example.invalid
+safe-zone.example.invalid

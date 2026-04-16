@@ -1,0 +1,4 @@
+﻿# Safe placeholder collaboration service domains
+teams-gateway.example.invalid
+skype-signaling.example.invalid
+media-cdn.example.invalid

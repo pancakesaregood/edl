@@ -144,6 +144,15 @@ pip install -r requirements.txt
 
 If `ttkbootstrap` is unavailable, the app falls back to standard Tkinter styling.
 
+### GitLab Token (Per User)
+
+Each operator and reviewer should use their own GitLab token for HTTPS remotes.
+
+- Preferred: paste token into the app `GitLab Token` field and click `Use Token` (session only).
+- Alternative: set environment variable `GITLAB_TOKEN` before launching the app.
+- `GitLab User` defaults to `oauth2`; change it only if your GitLab server policy requires a different username.
+- Tokens are not written to repo files or app config.
+
 ### Run
 
 ```powershell
@@ -187,6 +196,10 @@ The reviewer app focuses on review and approval decisions, not operator editing.
 ### Reviewer Features
 
 - Open local repo and fetch latest changes
+- Tabbed workspace to reduce clutter:
+  - `Review`
+  - `Release`
+  - `Logs`
 - Show changed `edl/working/*.txt` files needing review
 - Filter/search changed file list with statuses:
   - `pending review`
@@ -234,6 +247,8 @@ py -3 -m reviewer_app
 ./launch-edl-reviewer.bat
 ```
 
+Reviewer fetch actions against HTTPS remotes also require per-user token setup (`Use Token` or `GITLAB_TOKEN`).
+
 ### Reviewer Packaging (Optional)
 
 ```powershell
@@ -241,9 +256,55 @@ pip install pyinstaller
 pyinstaller --noconfirm --onefile --noconsole --name edl-reviewer-tool reviewer_app\\__main__.py
 ```
 
+## Troubleshooting Breadcrumbs
+
+Both desktop apps now write a persistent per-session diagnostic log automatically:
+
+- Operator logs: `logs/operator/operator-<timestamp>-<user>-<host>.log`
+- Reviewer logs: `logs/reviewer/reviewer-<timestamp>-<user>-<host>.log`
+
+The UI also includes an `Open Log Folder` button. On command failures and unexpected UI exceptions, dialogs include the exact diagnostic log path.
+
+When troubleshooting with me, send:
+
+1. The diagnostic `.log` file for the failed run.
+2. The failing action you clicked (for example `Validate`, `Checkin`, `Fetch Latest`).
+3. Approximate local timestamp of failure.
+
 ### Reviewer Assumptions and Repo Gaps
 
 - This repo had no formal reviewer sign-off schema before; `review-decisions/*.json` is the lightweight local audit mechanism now used.
 - Decision records are local repo artifacts and should be committed with the review branch for full traceability.
 - Changed-file review scope is derived from Git diff against a base ref (default `origin/main`) plus local working tree changes.
 - The tool does not perform GitLab API calls; it is endpoint-local and Git CLI driven.
+
+## Separation Enforcement
+
+This repository intentionally ships two separate desktop tools with separate UI flows:
+
+- Operator app: [`desktop_app`](/E:/edl/desktop_app)
+  - checkout, edit, validate, checkin, commit, push
+- Reviewer app: [`reviewer_app`](/E:/edl/reviewer_app)
+  - diff inspection, re-validation, approve/reject, sign-off recording, guarded release prep
+
+Reviewer actions are not merged into the operator editing screen, and reviewer sign-off metadata is stored under [`review-decisions`](/E:/edl/review-decisions).
+
+## GitLab End-State Rollout
+
+Use this repo model as the endpoint-local client for your work GitLab project:
+
+1. Create a GitLab project for this repository structure.
+2. Protect `main` and require merge requests.
+3. Require reviewer approval rules for EDL changes.
+4. Grant operator users `Developer` role (no direct merge to protected branch).
+5. Grant reviewer/release users approval rights per your GitLab policy.
+6. Enforce branch naming (for example `feature/<ticket>-<topic>`).
+7. Optionally add GitLab CI to run `scripts/validate.ps1 -All -IgnoreComments` on MR.
+8. Have users clone the GitLab project locally and point each app to that local clone path.
+
+Recommended local launch pattern on reviewer/operator endpoints:
+
+- Operator: `py -3 -m desktop_app` or `launch-edl-desktop.bat`
+- Reviewer: `py -3 -m reviewer_app` or `launch-edl-reviewer.bat`
+
+This keeps all editing and review actions local/auditable while GitLab remains the approval and source-of-truth system.

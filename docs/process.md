@@ -25,6 +25,13 @@ These list files are the controlled set currently maintained in this GitLab repo
 - **Release** means generated artifacts in `edl/releases/archive/<release-id>/` and `edl/releases/current/`.
 - **Published** means copied release output to the firewall ingest location.
 
+## GitLab Token Access (Per User)
+
+- Each operator/reviewer should use their own GitLab token for this project.
+- For desktop tools, enter token in the app and click `Use Token` (session-only), or set `GITLAB_TOKEN` before launch.
+- Use GitLab HTTPS remotes with protected branches and MR approval policy.
+- Do not share tokens between users.
+
 ## Directory Responsibilities
 
 - `edl/working`: editable by operators.

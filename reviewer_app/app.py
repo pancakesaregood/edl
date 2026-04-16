@@ -3,8 +3,12 @@
 from __future__ import annotations
 
 import datetime as dt
+import os
 from pathlib import Path
+import platform
+import socket
 import tkinter as tk
+import traceback
 from tkinter import filedialog, messagebox, simpledialog
 from tkinter.scrolledtext import ScrolledText
 
@@ -39,6 +43,9 @@ class ReviewerApp:
         self.selected_path: str | None = None
         self.validation_state: dict[str, tuple[bool, str]] = {}
         self.file_items: dict[str, ReviewFileItem] = {}
+        self.session_log_path: Path | None = None
+        self.main_tabs = None
+        self.logs_tab = None
 
         self.repo_path_var = tk.StringVar(value=config.default_repo_path)
         self.branch_var = tk.StringVar(value="")
@@ -47,6 +54,9 @@ class ReviewerApp:
         self.script_var = tk.StringVar(value="")
 
         self.reviewer_var = tk.StringVar(value="")
+        self.gitlab_user_var = tk.StringVar(value=config.gitlab_username or "oauth2")
+        self.gitlab_token_var = tk.StringVar(value="")
+        self.token_status_var = tk.StringVar(value="GitLab token: not set")
         self.search_var = tk.StringVar(value="")
         self.ticket_var = tk.StringVar(value="")
         self.release_id_var = tk.StringVar(value="")
@@ -60,8 +70,9 @@ class ReviewerApp:
         self.decision_hint_var = tk.StringVar(value="")
 
         self.root.title("EDL Reviewer Sign-Off Tool")
-        self.root.geometry("1600x950")
-        self.root.minsize(1250, 760)
+        self.root.geometry("1360x820")
+        self.root.minsize(1080, 640)
+        self.root.report_callback_exception = self.on_unhandled_exception
 
         self._build_ui()
         self._bind_events()
@@ -71,9 +82,7 @@ class ReviewerApp:
 
     def _build_ui(self) -> None:
         self.root.columnconfigure(0, weight=1)
-        self.root.rowconfigure(1, weight=4)
-        self.root.rowconfigure(2, weight=2)
-        self.root.rowconfigure(3, weight=2)
+        self.root.rowconfigure(1, weight=1)
 
         top = ttk.Frame(self.root, padding=8)
         top.grid(row=0, column=0, sticky="nsew")
@@ -108,8 +117,37 @@ class ReviewerApp:
         )
         ttk.Label(top, textvariable=self.script_var).grid(row=1, column=9, sticky="e", pady=(6, 0))
 
-        body = ttk.Frame(self.root, padding=(8, 0, 8, 8))
-        body.grid(row=1, column=0, sticky="nsew")
+        ttk.Label(top, text="GitLab User:").grid(row=2, column=0, sticky="w", pady=(6, 0))
+        self.gitlab_user_entry = ttk.Entry(top, textvariable=self.gitlab_user_var, width=22)
+        self.gitlab_user_entry.grid(row=2, column=1, sticky="w", padx=(6, 6), pady=(6, 0))
+        ttk.Label(top, text="GitLab Token:").grid(row=2, column=2, sticky="e", pady=(6, 0))
+        self.gitlab_token_entry = ttk.Entry(top, textvariable=self.gitlab_token_var, width=34, show="*")
+        self.gitlab_token_entry.grid(row=2, column=3, sticky="w", padx=(6, 6), pady=(6, 0))
+        self.apply_token_button = ttk.Button(top, text="Use Token", command=self.apply_gitlab_auth)
+        self.apply_token_button.grid(row=2, column=4, padx=(0, 8), pady=(6, 0))
+        ttk.Label(top, textvariable=self.token_status_var).grid(
+            row=2,
+            column=5,
+            columnspan=5,
+            sticky="w",
+            pady=(6, 0),
+        )
+
+        self.main_tabs = ttk.Notebook(self.root)
+        self.main_tabs.grid(row=1, column=0, sticky="nsew", padx=8, pady=(0, 8))
+
+        review_tab = ttk.Frame(self.main_tabs)
+        release_tab = ttk.Frame(self.main_tabs)
+        self.logs_tab = ttk.Frame(self.main_tabs)
+        self.main_tabs.add(review_tab, text="Review")
+        self.main_tabs.add(release_tab, text="Release")
+        self.main_tabs.add(self.logs_tab, text="Logs")
+
+        review_tab.columnconfigure(0, weight=1)
+        review_tab.rowconfigure(0, weight=1)
+
+        body = ttk.Frame(review_tab, padding=(0, 0, 0, 0))
+        body.grid(row=0, column=0, sticky="nsew")
         body.columnconfigure(0, weight=1)
         body.columnconfigure(1, weight=3)
         body.rowconfigure(0, weight=1)
@@ -195,8 +233,11 @@ class ReviewerApp:
         self.diff_text = ScrolledText(right, wrap="none", height=9, state="disabled")
         self.diff_text.grid(row=4, column=0, sticky="nsew")
 
-        release = ttk.LabelFrame(self.root, text="Release Readiness (Guarded)", padding=8)
-        release.grid(row=2, column=0, sticky="nsew", padx=8, pady=(0, 8))
+        release_tab.columnconfigure(0, weight=1)
+        release_tab.rowconfigure(0, weight=1)
+
+        release = ttk.LabelFrame(release_tab, text="Release Readiness (Guarded)", padding=8)
+        release.grid(row=0, column=0, sticky="nsew", padx=0, pady=0)
         release.columnconfigure(0, weight=2)
         release.columnconfigure(1, weight=1)
         release.rowconfigure(1, weight=1)
@@ -222,8 +263,11 @@ class ReviewerApp:
         self.publish_button = ttk.Button(rel_right, text="Publish (Guarded)", command=lambda: self.publish_release(False))
         self.publish_button.grid(row=4, column=0, columnspan=2, sticky="ew")
 
-        logs = ttk.LabelFrame(self.root, text="Activity Log", padding=8)
-        logs.grid(row=3, column=0, sticky="nsew", padx=8, pady=(0, 8))
+        self.logs_tab.columnconfigure(0, weight=1)
+        self.logs_tab.rowconfigure(0, weight=1)
+
+        logs = ttk.LabelFrame(self.logs_tab, text="Activity Log", padding=8)
+        logs.grid(row=0, column=0, sticky="nsew", padx=0, pady=0)
         logs.columnconfigure(0, weight=1)
         logs.rowconfigure(0, weight=1)
 
@@ -244,6 +288,13 @@ class ReviewerApp:
         self.command_text.grid(row=0, column=0, sticky="nsew")
         tabs.add(t2, text="Command Details")
 
+        log_actions = ttk.Frame(logs)
+        log_actions.grid(row=1, column=0, sticky="e", pady=(6, 0))
+        self.export_log_button = ttk.Button(log_actions, text="Export Log", command=self.export_log)
+        self.export_log_button.grid(row=0, column=0)
+        self.open_log_button = ttk.Button(log_actions, text="Open Log Folder", command=self.open_log_folder)
+        self.open_log_button.grid(row=0, column=1, padx=(6, 0))
+
         self.update_action_states()
 
     def _bind_events(self) -> None:
@@ -253,15 +304,96 @@ class ReviewerApp:
         self.reviewer_entry.bind("<KeyRelease>", lambda _e: self.update_action_states())
         self.ticket_entry.bind("<KeyRelease>", lambda _e: self.update_action_states())
         self.notes_text.bind("<KeyRelease>", lambda _e: self.update_action_states())
+        self.gitlab_user_entry.bind("<Return>", lambda _e: self.apply_gitlab_auth())
+        self.gitlab_token_entry.bind("<Return>", lambda _e: self.apply_gitlab_auth())
 
     def now(self) -> str:
         return dt.datetime.now().strftime("%Y-%m-%d %H:%M:%S")
 
     def log(self, text: str) -> None:
+        line = f"[{self.now()}] {text}"
         self.log_text.configure(state="normal")
-        self.log_text.insert("end", f"[{self.now()}] {text}\n")
+        self.log_text.insert("end", line + "\n")
         self.log_text.see("end")
         self.log_text.configure(state="disabled")
+        self.write_session_log(line)
+
+    def write_session_log(self, line: str) -> None:
+        if not self.session_log_path:
+            return
+        try:
+            self.session_log_path.parent.mkdir(parents=True, exist_ok=True)
+            with self.session_log_path.open("a", encoding="utf-8") as handle:
+                handle.write(line + "\n")
+        except Exception:
+            # Never crash the UI on logging failure.
+            pass
+
+    def init_session_log(self) -> None:
+        if not self.service:
+            return
+
+        try:
+            log_dir = self.service.repo_path / "logs" / "reviewer"
+            log_dir.mkdir(parents=True, exist_ok=True)
+
+            stamp = dt.datetime.now().strftime("%Y%m%d-%H%M%S")
+            user = self.service.git_user().replace(" ", "_")
+            host = socket.gethostname().replace(" ", "_")
+            self.session_log_path = log_dir / f"reviewer-{stamp}-{user}-{host}.log"
+
+            header = [
+                f"# EDL Reviewer Session Log",
+                f"# started_at_local={dt.datetime.now().isoformat()}",
+                f"# started_at_utc={dt.datetime.now(dt.timezone.utc).isoformat()}",
+                f"# repo_path={self.service.repo_path}",
+                f"# hostname={host}",
+                f"# user={user}",
+                f"# python={platform.python_version()}",
+                f"# platform={platform.platform()}",
+            ]
+            self.session_log_path.write_text("\n".join(header) + "\n", encoding="utf-8")
+        except Exception as exc:
+            self.session_log_path = None
+            self.log(f"Failed to initialize session log: {exc}")
+
+    def diagnostics_hint(self) -> str:
+        if self.session_log_path:
+            return f"Diagnostics log: {self.session_log_path}"
+        return "Diagnostics log not initialized."
+
+    def capture_runtime_snapshot(self, reason: str) -> None:
+        if not self.service:
+            return
+
+        self.log(f"SNAPSHOT: {reason}")
+        self.log(f"Repo: {self.service.repo_path}")
+        self.log(f"Branch: {self.service.git_branch()}")
+        self.log(f"Git status: {self.service.git_status_summary()}")
+        self.log(f"Selected path: {self.selected_path or '(none)'}")
+        self.log(f"Base ref: {self.base_ref}")
+        changed = self.service.changed_review_files(self.base_ref)
+        if changed:
+            preview = ", ".join(changed[:20])
+            if len(changed) > 20:
+                preview += ", ..."
+            self.log(f"Review files ({len(changed)}): {preview}")
+        else:
+            self.log("Review files (0): (none)")
+
+    def on_unhandled_exception(self, exc_type, exc_value, exc_traceback) -> None:
+        if self.main_tabs is not None and self.logs_tab is not None:
+            self.main_tabs.select(self.logs_tab)
+        trace = "".join(traceback.format_exception(exc_type, exc_value, exc_traceback)).rstrip()
+        self.log("UNHANDLED EXCEPTION:")
+        self.log(trace)
+        self.capture_runtime_snapshot("unhandled exception")
+        messagebox.showerror(
+            "Unexpected Error",
+            "An unexpected error occurred.\n\n"
+            f"{exc_value}\n\n"
+            f"{self.diagnostics_hint()}",
+        )
 
     def show_command(self, result) -> None:
         payload = []
@@ -287,6 +419,57 @@ class ReviewerApp:
             self.log("STDERR: " + result.stderr.strip().splitlines()[-1])
         self.log(f"EXIT CODE: {result.returncode}")
         self.show_command(result)
+        if not result.ok:
+            if self.main_tabs is not None and self.logs_tab is not None:
+                self.main_tabs.select(self.logs_tab)
+            self.capture_runtime_snapshot("command failed")
+            self.log(self.diagnostics_hint())
+
+    def apply_gitlab_auth(self, log_notice: bool = True) -> None:
+        if not self.service:
+            return
+
+        username = self.gitlab_user_var.get().strip() or "oauth2"
+        token = self.gitlab_token_var.get().strip()
+        self.service.set_gitlab_auth(username, token)
+
+        self.config.gitlab_username = username
+        save_config(self.config)
+
+        if self.service.gitlab_token_configured():
+            source = "session token" if token else "GITLAB_TOKEN environment variable"
+            self.token_status_var.set(f"GitLab token: configured ({source})")
+            if log_notice:
+                self.log(f"GitLab auth ready for '{username}' using {source}.")
+        else:
+            self.token_status_var.set("GitLab token: missing (set token or GITLAB_TOKEN env var)")
+            if log_notice:
+                self.log("GitLab token is not configured for network git commands.")
+
+        self.update_action_states()
+
+    def can_run_network_git(self) -> bool:
+        if not self.service:
+            return False
+
+        if not self.service.git_origin_uses_http():
+            return True
+
+        return self.service.gitlab_token_configured()
+
+    def ensure_network_git_ready(self, action_name: str) -> bool:
+        if self.can_run_network_git():
+            return True
+
+        if self.service and self.service.git_origin_uses_http():
+            messagebox.showwarning(
+                "GitLab Token Required",
+                f"'{action_name}' requires a GitLab token for HTTPS remotes.\n\n"
+                "Enter your token and click 'Use Token'.",
+            )
+        else:
+            messagebox.showwarning("Git", f"'{action_name}' is not available right now.")
+        return False
 
     def set_text(self, widget: ScrolledText, content: str) -> None:
         widget.configure(state="normal")
@@ -317,6 +500,7 @@ class ReviewerApp:
                 self.diff_text.tag_add("hunk", start, end)
 
         self.diff_text.configure(state="disabled")
+
     def browse_repo(self) -> None:
         selected = filedialog.askdirectory(
             title="Select EDL Repo",
@@ -347,6 +531,8 @@ class ReviewerApp:
         self.service = service
         self.store = ReviewStore(repo_path)
         self.scripts = service.detect_scripts()
+        self.init_session_log()
+        self.apply_gitlab_auth(log_notice=False)
 
         self.validation_state.clear()
         self.file_items.clear()
@@ -357,6 +543,8 @@ class ReviewerApp:
 
         self.clear_current_view()
         self.log(f"Opened repository: {repo_path}")
+        self.log(self.diagnostics_hint())
+        self.capture_runtime_snapshot("repo opened")
         self.refresh_all()
 
     def clear_current_view(self) -> None:
@@ -376,13 +564,15 @@ class ReviewerApp:
         if not self.service.git_available():
             messagebox.showerror("Fetch", "Git is not available for this repo path.")
             return
+        if not self.ensure_network_git_ready("Fetch Latest"):
+            return
 
         result = self.service.fetch_latest()
         self.log_result(result)
         if result.ok:
             messagebox.showinfo("Fetch", "Fetch completed.")
         else:
-            messagebox.showerror("Fetch", "Fetch failed. See command details.")
+            messagebox.showerror("Fetch", f"Fetch failed.\n\n{self.diagnostics_hint()}")
 
         self.refresh_all()
 
@@ -406,6 +596,12 @@ class ReviewerApp:
             self.script_var.set("Missing scripts: " + ", ".join(self.scripts.missing))
         else:
             self.script_var.set("All review scripts detected.")
+
+        if self.service.gitlab_token_configured():
+            source = "session token" if self.gitlab_token_var.get().strip() else "GITLAB_TOKEN environment variable"
+            self.token_status_var.set(f"GitLab token: configured ({source})")
+        else:
+            self.token_status_var.set("GitLab token: missing (set token or GITLAB_TOKEN env var)")
 
         self.load_review_items()
         self.refresh_release_ids()
@@ -546,6 +742,7 @@ class ReviewerApp:
             self.file_tree.focus(path)
             self.selected_path = path
             self.load_selected_file()
+
     def selected_required(self) -> str | None:
         if not self.selected_path:
             messagebox.showwarning("Selection", "Select a changed file first.")
@@ -589,7 +786,7 @@ class ReviewerApp:
         if result.ok:
             messagebox.showinfo("Validation", "Validation passed.")
         else:
-            messagebox.showerror("Validation", "Validation failed. See command details.")
+            messagebox.showerror("Validation", f"Validation failed.\n\n{self.diagnostics_hint()}")
 
         self.load_review_items()
         return result.ok
@@ -712,7 +909,7 @@ class ReviewerApp:
             self.load_review_items()
         except Exception as exc:
             self.log(f"Promotion failed: {exc}")
-            messagebox.showerror("Promote", f"Promotion failed:\n{exc}")
+            messagebox.showerror("Promote", f"Promotion failed:\n{exc}\n\n{self.diagnostics_hint()}")
 
     def refresh_approved_items(self) -> None:
         self.approved_list.delete(0, "end")
@@ -753,7 +950,7 @@ class ReviewerApp:
                         self.release_id_var.set(parts[1].strip())
             messagebox.showinfo("Build Release", "Release build succeeded.")
         else:
-            messagebox.showerror("Build Release", "Release build failed. See command details.")
+            messagebox.showerror("Build Release", f"Release build failed.\n\n{self.diagnostics_hint()}")
 
         self.refresh_all()
 
@@ -793,7 +990,41 @@ class ReviewerApp:
         if result.ok:
             messagebox.showinfo("Publish", "Publish command completed.")
         else:
-            messagebox.showerror("Publish", "Publish command failed. See command details.")
+            messagebox.showerror("Publish", f"Publish command failed.\n\n{self.diagnostics_hint()}")
+
+    def export_log(self) -> None:
+        content = self.log_text.get("1.0", "end-1c")
+        if not content.strip():
+            messagebox.showinfo("Export Log", "No log content to export.")
+            return
+
+        target = filedialog.asksaveasfilename(
+            title="Export Activity Log",
+            defaultextension=".log",
+            filetypes=[("Log files", "*.log"), ("Text files", "*.txt"), ("All files", "*.*")],
+        )
+        if not target:
+            return
+
+        Path(target).write_text(content, encoding="utf-8")
+        self.log(f"Exported activity log to {target}")
+
+    def open_log_folder(self) -> None:
+        if self.session_log_path:
+            folder = self.session_log_path.parent
+        elif self.service:
+            folder = self.service.repo_path / "logs" / "reviewer"
+            folder.mkdir(parents=True, exist_ok=True)
+        else:
+            messagebox.showinfo("Open Log Folder", "Open a repo first.")
+            return
+
+        try:
+            os.startfile(str(folder))  # type: ignore[attr-defined]
+            self.log(f"Opened log folder: {folder}")
+        except Exception as exc:
+            self.log(f"Failed to open log folder: {exc}")
+            messagebox.showerror("Open Log Folder", f"Could not open log folder:\n{exc}")
 
     def _approve_hint(self) -> str:
         if not self.selected_path:
@@ -810,6 +1041,9 @@ class ReviewerApp:
     def update_action_states(self) -> None:
         has_service = self.service is not None
         has_file = self.selected_path is not None
+        self.apply_token_button.configure(state="normal" if has_service else "disabled")
+        self.open_log_button.configure(state="normal" if has_service else "disabled")
+        self.export_log_button.configure(state="normal")
 
         self.validate_button.configure(state="normal" if (has_service and has_file and self.scripts.validate) else "disabled")
         self.diff_button.configure(state="normal" if (has_service and has_file) else "disabled")
@@ -841,6 +1075,7 @@ class ReviewerApp:
         self.config.default_repo_path = self.repo_path_var.get().strip()
         self.config.default_base_ref = self.base_ref
         self.config.ignore_comments_by_default = self.ignore_comments_var.get()
+        self.config.gitlab_username = self.gitlab_user_var.get().strip() or "oauth2"
         save_config(self.config)
         self.root.destroy()
 

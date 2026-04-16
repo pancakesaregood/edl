@@ -12,6 +12,7 @@ class AppConfig:
     default_repo_path: str = ""
     theme: str = "flatly"
     ignore_comments_by_default: bool = True
+    gitlab_username: str = "oauth2"
 
 
 def config_path() -> Path:
@@ -32,6 +33,7 @@ def load_config() -> AppConfig:
         default_repo_path=str(data.get("default_repo_path", "")),
         theme=str(data.get("theme", "flatly")),
         ignore_comments_by_default=bool(data.get("ignore_comments_by_default", True)),
+        gitlab_username=str(data.get("gitlab_username", "oauth2")),
     )
 
 
@@ -40,5 +42,6 @@ def save_config(config: AppConfig) -> None:
         "default_repo_path": config.default_repo_path,
         "theme": config.theme,
         "ignore_comments_by_default": config.ignore_comments_by_default,
+        "gitlab_username": config.gitlab_username,
     }
     config_path().write_text(json.dumps(payload, indent=2), encoding="utf-8")

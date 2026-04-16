@@ -1,0 +1,53 @@
+﻿{
+    "release_id":  "release-20260416-160500",
+    "created_at":  "2026-04-16T15:38:37.0767811Z",
+    "created_by":  "john",
+    "source_commit":  "76a6101405c4aff7746eb25646b151adacdc43ba",
+    "files":  [
+                  {
+                      "path":  "Corp_url_whitelist.txt",
+                      "sha256":  "5AAA3DD0DB2C2740406BA7DDD64B53BC27FA805050A59C2308B5630F6B2A1922",
+                      "size_bytes":  155
+                  },
+                  {
+                      "path":  "domainblocklist.txt",
+                      "sha256":  "B6D8A3704E9550D7CFEEFC9D5FBA31D2E7D889247B2E6E3B1D6DFE6638DABE1E",
+                      "size_bytes":  124
+                  },
+                  {
+                      "path":  "greenspace.txt",
+                      "sha256":  "E4F09825154F1C7C10FDB96464F50D023FCB6C2E37589D2405BB9B61D6AA61C2",
+                      "size_bytes":  124
+                  },
+                  {
+                      "path":  "internet_only_whitelist.txt",
+                      "sha256":  "45F4F9B863D56BE7CE7B2D0AE088D413044771254C1BCD425C0DA04B5368CAF1",
+                      "size_bytes":  153
+                  },
+                  {
+                      "path":  "ip_blocklist.txt",
+                      "sha256":  "2081A7AC50BDF2538E8E377EE2FBA9EFF78900A0252617F5772DAE31F6472179",
+                      "size_bytes":  85
+                  },
+                  {
+                      "path":  "ipset_blocklist.txt",
+                      "sha256":  "C824CEEDEAFC7554DF2AA7F1A3C2EE96BB751D2B8EB6910651A30717290BC7BC",
+                      "size_bytes":  92
+                  },
+                  {
+                      "path":  "nodescrypt.txt",
+                      "sha256":  "663D8DB4B4335BCF82AFF26243488584BFAB4C0D3CA52D1771C5E0CA8BB2E206",
+                      "size_bytes":  142
+                  },
+                  {
+                      "path":  "skype_teams.txt",
+                      "sha256":  "F57565476779604FAF9C9A88C3516FBA7215AEA2EF2FC8EABD373F4A2C54AC14",
+                      "size_bytes":  141
+                  },
+                  {
+                      "path":  "url_blocklist.txt",
+                      "sha256":  "CD0F8DA45885FF2CF9D02F12F59E356B6309C3840DA0F77278E1932C91C3998A",
+                      "size_bytes":  164
+                  }
+              ]
+}

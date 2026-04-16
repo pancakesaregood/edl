@@ -1,0 +1,4 @@
+﻿# Safe placeholder nodescrypt domains
+node-a.nodescrypt.example.invalid
+node-b.nodescrypt.example.invalid
+seed.nodescrypt.example.invalid

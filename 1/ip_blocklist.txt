@@ -1,0 +1,4 @@
+﻿# Safe placeholder IP blocklist entries
+198.51.100.19
+203.0.113.200
+192.0.2.0/28

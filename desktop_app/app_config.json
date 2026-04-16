@@ -1,5 +1,6 @@
 {
   "default_repo_path": "E:\\edl",
   "theme": "flatly",
-  "ignore_comments_by_default": true
+  "ignore_comments_by_default": true,
+  "gitlab_username": "oauth2"
 }

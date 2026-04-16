@@ -3,8 +3,12 @@
 from __future__ import annotations
 
 import datetime as dt
+import os
 from pathlib import Path
+import platform
+import socket
 import tkinter as tk
+import traceback
 from tkinter import filedialog, messagebox
 from tkinter.scrolledtext import ScrolledText
 
@@ -35,12 +39,16 @@ class EDLDesktopApp:
         self.loaded_text = ""
         self.is_dirty = False
         self.validation_failures: set[str] = set()
+        self.session_log_path: Path | None = None
 
         self.repo_path_var = tk.StringVar(value=config.default_repo_path)
         self.branch_var = tk.StringVar(value="")
         self.user_var = tk.StringVar(value="")
         self.search_var = tk.StringVar(value="")
         self.ticket_var = tk.StringVar(value="")
+        self.gitlab_user_var = tk.StringVar(value=config.gitlab_username or "oauth2")
+        self.gitlab_token_var = tk.StringVar(value="")
+        self.token_status_var = tk.StringVar(value="GitLab token: not set")
         self.file_status_var = tk.StringVar(value="No file selected")
         self.lock_detail_var = tk.StringVar(value="")
         self.duplicate_var = tk.StringVar(value="Duplicate lines: 0")
@@ -57,6 +65,7 @@ class EDLDesktopApp:
         self.root.geometry("1400x900")
         self.root.minsize(1100, 700)
         self.root.protocol("WM_DELETE_WINDOW", self.on_close)
+        self.root.report_callback_exception = self.on_unhandled_exception
 
         self.build_layout()
         self.bind_events()
@@ -94,7 +103,26 @@ class EDLDesktopApp:
         self.refresh_button = ttk.Button(top, text="Refresh", command=self.refresh_all)
         self.refresh_button.grid(row=0, column=8, sticky="e", padx=(8, 0))
 
-        ttk.Label(top, textvariable=self.script_status_var).grid(row=1, column=0, columnspan=9, sticky="w", pady=(6, 0))
+        ttk.Label(top, text="GitLab User:").grid(row=1, column=0, sticky="w", pady=(6, 0))
+        self.gitlab_user_entry = ttk.Entry(top, textvariable=self.gitlab_user_var, width=20)
+        self.gitlab_user_entry.grid(row=1, column=1, sticky="w", padx=(6, 6), pady=(6, 0))
+
+        ttk.Label(top, text="GitLab Token:").grid(row=1, column=2, sticky="e", pady=(6, 0))
+        self.gitlab_token_entry = ttk.Entry(top, textvariable=self.gitlab_token_var, width=32, show="*")
+        self.gitlab_token_entry.grid(row=1, column=3, sticky="w", padx=(6, 6), pady=(6, 0))
+
+        self.apply_token_button = ttk.Button(top, text="Use Token", command=self.apply_gitlab_auth)
+        self.apply_token_button.grid(row=1, column=4, padx=(0, 6), pady=(6, 0))
+
+        ttk.Label(top, textvariable=self.token_status_var).grid(
+            row=1,
+            column=5,
+            columnspan=4,
+            sticky="w",
+            pady=(6, 0),
+        )
+
+        ttk.Label(top, textvariable=self.script_status_var).grid(row=2, column=0, columnspan=9, sticky="w", pady=(6, 0))
 
         middle = ttk.Frame(self.root, padding=(8, 0, 8, 8))
         middle.grid(row=1, column=0, sticky="nsew")
@@ -175,6 +203,8 @@ class EDLDesktopApp:
         log_actions = ttk.Frame(log_frame)
         log_actions.grid(row=1, column=0, sticky="e", pady=(6, 0))
         ttk.Button(log_actions, text="Export Log", command=self.export_log).grid(row=0, column=0)
+        self.open_log_button = ttk.Button(log_actions, text="Open Log Folder", command=self.open_log_folder)
+        self.open_log_button.grid(row=0, column=1, padx=(6, 0))
 
         bottom = ttk.Frame(self.root, padding=(8, 0, 8, 8))
         bottom.grid(row=3, column=0, sticky="nsew")
@@ -242,15 +272,93 @@ class EDLDesktopApp:
         self.editor_text.bind("<<Modified>>", self.on_editor_modified)
         self.editor_text.bind("<Control-s>", lambda e: self.save_current_file() or "break")
         self.repo_entry.bind("<Return>", lambda e: self.open_repo())
+        self.gitlab_user_entry.bind("<Return>", lambda e: self.apply_gitlab_auth())
+        self.gitlab_token_entry.bind("<Return>", lambda e: self.apply_gitlab_auth())
 
     def timestamp(self) -> str:
         return dt.datetime.now().strftime("%Y-%m-%d %H:%M:%S")
 
     def log(self, message: str) -> None:
+        line = f"[{self.timestamp()}] {message}"
         self.log_text.configure(state="normal")
-        self.log_text.insert("end", f"[{self.timestamp()}] {message}\n")
+        self.log_text.insert("end", line + "\n")
         self.log_text.see("end")
         self.log_text.configure(state="disabled")
+        self.write_session_log(line)
+
+    def write_session_log(self, line: str) -> None:
+        if not self.session_log_path:
+            return
+        try:
+            self.session_log_path.parent.mkdir(parents=True, exist_ok=True)
+            with self.session_log_path.open("a", encoding="utf-8") as handle:
+                handle.write(line + "\n")
+        except Exception:
+            # Never crash the UI on logging failures.
+            pass
+
+    def init_session_log(self) -> None:
+        if not self.service:
+            return
+
+        try:
+            log_dir = self.service.repo_path / "logs" / "operator"
+            log_dir.mkdir(parents=True, exist_ok=True)
+
+            stamp = dt.datetime.now().strftime("%Y%m%d-%H%M%S")
+            user = self.service.current_username().replace(" ", "_")
+            host = socket.gethostname().replace(" ", "_")
+            self.session_log_path = log_dir / f"operator-{stamp}-{user}-{host}.log"
+
+            header = [
+                f"# EDL Operator Session Log",
+                f"# started_at_local={dt.datetime.now().isoformat()}",
+                f"# started_at_utc={dt.datetime.now(dt.timezone.utc).isoformat()}",
+                f"# repo_path={self.service.repo_path}",
+                f"# hostname={host}",
+                f"# user={user}",
+                f"# python={platform.python_version()}",
+                f"# platform={platform.platform()}",
+            ]
+            self.session_log_path.write_text("\n".join(header) + "\n", encoding="utf-8")
+        except Exception as exc:
+            self.session_log_path = None
+            self.log(f"Failed to initialize session log: {exc}")
+
+    def diagnostics_hint(self) -> str:
+        if self.session_log_path:
+            return f"Diagnostics log: {self.session_log_path}"
+        return "Diagnostics log not initialized."
+
+    def capture_runtime_snapshot(self, reason: str) -> None:
+        if not self.service:
+            return
+
+        self.log(f"SNAPSHOT: {reason}")
+        self.log(f"Repo: {self.service.repo_path}")
+        self.log(f"Branch: {self.service.git_branch()}")
+        self.log(f"Git User: {self.service.git_user()}")
+        self.log(f"Current file: {self.current_file or '(none)'} | dirty={self.is_dirty}")
+        changed = self.service.git_changed_files()
+        if changed:
+            preview = ", ".join(changed[:20])
+            if len(changed) > 20:
+                preview += ", ..."
+            self.log(f"Changed files ({len(changed)}): {preview}")
+        else:
+            self.log("Changed files (0): (none)")
+
+    def on_unhandled_exception(self, exc_type, exc_value, exc_traceback) -> None:
+        trace = "".join(traceback.format_exception(exc_type, exc_value, exc_traceback)).rstrip()
+        self.log("UNHANDLED EXCEPTION:")
+        self.log(trace)
+        self.capture_runtime_snapshot("unhandled exception")
+        messagebox.showerror(
+            "Unexpected Error",
+            "An unexpected error occurred.\n\n"
+            f"{exc_value}\n\n"
+            f"{self.diagnostics_hint()}",
+        )
 
     def log_command_result(self, result: CommandResult) -> None:
         self.log(f"COMMAND: {' '.join(result.command)}")
@@ -259,6 +367,55 @@ class EDLDesktopApp:
         if result.stderr.strip():
             self.log("STDERR:\n" + result.stderr.rstrip())
         self.log(f"EXIT CODE: {result.returncode}")
+        if not result.ok:
+            self.capture_runtime_snapshot("command failed")
+            self.log(self.diagnostics_hint())
+
+    def apply_gitlab_auth(self, log_notice: bool = True) -> None:
+        if not self.service:
+            return
+
+        username = self.gitlab_user_var.get().strip() or "oauth2"
+        token = self.gitlab_token_var.get().strip()
+        self.service.set_gitlab_auth(username, token)
+
+        self.config.gitlab_username = username
+        save_config(self.config)
+
+        if self.service.gitlab_token_configured():
+            source = "session token" if token else "GITLAB_TOKEN environment variable"
+            self.token_status_var.set(f"GitLab token: configured ({source})")
+            if log_notice:
+                self.log(f"GitLab auth ready for '{username}' using {source}.")
+        else:
+            self.token_status_var.set("GitLab token: missing (set token or GITLAB_TOKEN env var)")
+            if log_notice:
+                self.log("GitLab token is not configured for network git commands.")
+
+        self.update_action_states()
+
+    def can_run_network_git(self) -> bool:
+        if not self.service:
+            return False
+
+        if not self.service.git_origin_uses_http():
+            return True
+
+        return self.service.gitlab_token_configured()
+
+    def ensure_network_git_ready(self, action_name: str) -> bool:
+        if self.can_run_network_git():
+            return True
+
+        if self.service and self.service.git_origin_uses_http():
+            messagebox.showwarning(
+                "GitLab Token Required",
+                f"'{action_name}' requires a GitLab token for HTTPS remotes.\n\n"
+                "Enter your token and click 'Use Token'.",
+            )
+        else:
+            messagebox.showwarning("Git", f"'{action_name}' is not available right now.")
+        return False
 
     def browse_repo(self) -> None:
         selected = filedialog.askdirectory(
@@ -307,7 +464,11 @@ class EDLDesktopApp:
         self.lock_detail_var.set("")
         self.duplicate_var.set("Duplicate lines: 0")
 
+        self.init_session_log()
+        self.apply_gitlab_auth(log_notice=False)
         self.log(f"Opened repository: {repo_path}")
+        self.log(self.diagnostics_hint())
+        self.capture_runtime_snapshot("repo opened")
         self.refresh_all()
 
     def refresh_all(self) -> None:
@@ -325,6 +486,12 @@ class EDLDesktopApp:
             )
         else:
             self.script_status_var.set("All workflow scripts detected.")
+
+        if self.service.gitlab_token_configured():
+            source = "session token" if self.gitlab_token_var.get().strip() else "GITLAB_TOKEN environment variable"
+            self.token_status_var.set(f"GitLab token: configured ({source})")
+        else:
+            self.token_status_var.set("GitLab token: missing (set token or GITLAB_TOKEN env var)")
 
         self.populate_file_list()
         self.refresh_changed_files()
@@ -516,7 +683,7 @@ class EDLDesktopApp:
         if result.ok:
             messagebox.showinfo("Checkout", "Checkout succeeded.")
         else:
-            messagebox.showerror("Checkout", "Checkout failed. See activity log for details.")
+            messagebox.showerror("Checkout", f"Checkout failed.\n\n{self.diagnostics_hint()}")
 
         self.refresh_all()
 
@@ -546,7 +713,7 @@ class EDLDesktopApp:
             ok = True
         else:
             self.validation_failures.add(file_name)
-            messagebox.showerror("Validate", "Validation failed. See activity log for details.")
+            messagebox.showerror("Validate", f"Validation failed.\n\n{self.diagnostics_hint()}")
             ok = False
 
         self.refresh_all()
@@ -587,7 +754,7 @@ class EDLDesktopApp:
             messagebox.showinfo("Checkin", "Checkin succeeded.")
         else:
             self.validation_failures.add(file_name)
-            messagebox.showerror("Checkin", "Checkin failed. See activity log for details.")
+            messagebox.showerror("Checkin", f"Checkin failed.\n\n{self.diagnostics_hint()}")
 
         self.refresh_all()
 
@@ -621,7 +788,7 @@ class EDLDesktopApp:
             self.new_branch_var.set("")
             messagebox.showinfo("Branch", "Branch created and checked out.")
         else:
-            messagebox.showerror("Branch", "Branch creation failed. See activity log.")
+            messagebox.showerror("Branch", f"Branch creation failed.\n\n{self.diagnostics_hint()}")
 
         self.refresh_all()
 
@@ -660,7 +827,7 @@ class EDLDesktopApp:
         add_result = self.service.git_command("add", "-A")
         self.log_command_result(add_result)
         if not add_result.ok:
-            messagebox.showerror("Commit", "git add failed. See activity log.")
+            messagebox.showerror("Commit", f"git add failed.\n\n{self.diagnostics_hint()}")
             self.refresh_all()
             return
 
@@ -671,7 +838,7 @@ class EDLDesktopApp:
             self.commit_message_var.set("")
             messagebox.showinfo("Commit", "Commit succeeded.")
         else:
-            messagebox.showerror("Commit", "Commit failed. See activity log.")
+            messagebox.showerror("Commit", f"Commit failed.\n\n{self.diagnostics_hint()}")
 
         self.refresh_all()
 
@@ -680,6 +847,8 @@ class EDLDesktopApp:
             return
         if not self.service.git_available():
             messagebox.showerror("Git", "Git is not available for this repo path.")
+            return
+        if not self.ensure_network_git_ready("Push"):
             return
 
         branch = self.service.git_branch().strip()
@@ -690,13 +859,13 @@ class EDLDesktopApp:
         if not messagebox.askyesno("Confirm Push", f"Push branch '{branch}' to origin?"):
             return
 
-        result = self.service.git_command("push", "-u", "origin", branch)
+        result = self.service.git_push_branch(branch)
         self.log_command_result(result)
 
         if result.ok:
             messagebox.showinfo("Push", "Push succeeded.")
         else:
-            messagebox.showerror("Push", "Push failed. See activity log.")
+            messagebox.showerror("Push", f"Push failed.\n\n{self.diagnostics_hint()}")
 
         self.refresh_all()
 
@@ -725,7 +894,7 @@ class EDLDesktopApp:
         if result.ok:
             messagebox.showinfo("Build Release", "Release build succeeded.")
         else:
-            messagebox.showerror("Build Release", "Release build failed. See activity log.")
+            messagebox.showerror("Build Release", f"Release build failed.\n\n{self.diagnostics_hint()}")
 
         self.refresh_all()
 
@@ -761,7 +930,7 @@ class EDLDesktopApp:
         if result.ok:
             messagebox.showinfo("Publish Release", "Publish command completed.")
         else:
-            messagebox.showerror("Publish Release", "Publish command failed. See activity log.")
+            messagebox.showerror("Publish Release", f"Publish command failed.\n\n{self.diagnostics_hint()}")
 
     def export_log(self) -> None:
         content = self.log_text.get("1.0", "end-1c")
@@ -780,6 +949,23 @@ class EDLDesktopApp:
         Path(target).write_text(content, encoding="utf-8")
         self.log(f"Exported activity log to {target}")
 
+    def open_log_folder(self) -> None:
+        if self.session_log_path:
+            folder = self.session_log_path.parent
+        elif self.service:
+            folder = self.service.repo_path / "logs" / "operator"
+            folder.mkdir(parents=True, exist_ok=True)
+        else:
+            messagebox.showinfo("Open Log Folder", "Open a repo first.")
+            return
+
+        try:
+            os.startfile(str(folder))  # type: ignore[attr-defined]
+            self.log(f"Opened log folder: {folder}")
+        except Exception as exc:
+            self.log(f"Failed to open log folder: {exc}")
+            messagebox.showerror("Open Log Folder", f"Could not open log folder:\n{exc}")
+
     def update_action_states(self) -> None:
         has_service = self.service is not None
         has_file = self.current_file is not None
@@ -794,12 +980,16 @@ class EDLDesktopApp:
         self.checkin_button.configure(state=checkin_state)
         self.save_button.configure(state=save_state)
         self.refresh_file_button.configure(state="normal" if (has_service and has_file) else "disabled")
+        self.apply_token_button.configure(state="normal" if has_service else "disabled")
+        self.open_log_button.configure(state="normal" if has_service else "disabled")
 
         git_ok = has_service and self.service is not None and self.service.git_available()
         state_git = "normal" if git_ok else "disabled"
         self.create_branch_button.configure(state=state_git)
         self.commit_button.configure(state=state_git)
-        self.push_button.configure(state=state_git)
+
+        push_state = "normal" if (git_ok and self.can_run_network_git()) else "disabled"
+        self.push_button.configure(state=push_state)
 
         build_state = "normal" if (has_service and self.script_availability.build_release) else "disabled"
         publish_state = "normal" if (has_service and self.script_availability.publish_release) else "disabled"
@@ -823,6 +1013,7 @@ class EDLDesktopApp:
         if not self.confirm_save_if_dirty("closing the app"):
             return
         self.config.ignore_comments_by_default = self.ignore_comments_var.get()
+        self.config.gitlab_username = self.gitlab_user_var.get().strip() or "oauth2"
         save_config(self.config)
         self.root.destroy()
 

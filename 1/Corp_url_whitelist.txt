@@ -1,0 +1,4 @@
+﻿# Safe placeholder entries for corporate URL allowlist
+portal.corp.example.invalid/
+*.corp.example.invalid/apps/*
+status.corp.example.invalid/health/*
