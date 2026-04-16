@@ -3,5 +3,7 @@
   "theme": "flatly",
   "default_base_ref": "origin/main",
   "ignore_comments_by_default": true,
-  "gitlab_username": "oauth2"
+  "gitlab_username": "oauth2",
+  "gitlab_base_url": "",
+  "gitlab_project_path": ""
 }

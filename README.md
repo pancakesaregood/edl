@@ -198,6 +198,7 @@ The reviewer app focuses on review and approval decisions, not operator editing.
 - Open local repo and fetch latest changes
 - Tabbed workspace to reduce clutter:
   - `Review`
+  - `GitLab`
   - `Release`
   - `Logs`
 - Show changed `edl/working/*.txt` files needing review
@@ -213,6 +214,11 @@ The reviewer app focuses on review and approval decisions, not operator editing.
 - Approve / reject with decision safeguards:
   - approve requires reviewer name, ticket, and passing validation
   - reject requires reviewer name, ticket, and note
+- GitLab-native reviewer flow:
+  - connect to GitLab URL + project using per-user token
+  - load open merge requests (optionally only those assigned to current reviewer)
+  - approve merge requests in GitLab (role/permission dependent)
+  - remove approval, add review notes, and open MR in browser
 - Persist reviewer decisions to JSON sign-off artifacts
 - Optional guarded promotion to `edl/approved`
 - Optional guarded release build/publish controls (if scripts exist)

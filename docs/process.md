@@ -97,9 +97,15 @@ git push -u origin feature/CHG-1234-domainblocklist-refresh
 2. Re-run validation locally.
 3. Confirm no malformed entries or duplicates.
 4. Confirm lock files are not committed.
-5. Approve MR.
+5. Approve MR in GitLab (reviewer account with proper role/approval rights).
 6. Merge to `main`.
 7. Promote reviewed content from `working` to `approved` in controlled MR (or same MR if your policy allows).
+
+Desktop reviewer app support:
+
+- Use the `GitLab` tab to connect with user token + project.
+- Load open merge requests assigned to you.
+- Approve/unapprove and add review notes directly to the GitLab MR.
 
 Promotion example:
 

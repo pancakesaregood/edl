@@ -9,6 +9,7 @@ import platform
 import socket
 import tkinter as tk
 import traceback
+import webbrowser
 from tkinter import filedialog, messagebox, simpledialog
 from tkinter.scrolledtext import ScrolledText
 
@@ -24,6 +25,7 @@ except Exception:
     ttkbootstrap = None
 
 from .config import ReviewerConfig, load_config, save_config
+from .gitlab_service import GitLabApiResult, GitLabService
 from .models import ReviewDecision, ReviewFileItem, ScriptAvailability
 from .repo_service import ReviewerRepoService
 from .review_store import ReviewStore
@@ -46,6 +48,12 @@ class ReviewerApp:
         self.session_log_path: Path | None = None
         self.main_tabs = None
         self.logs_tab = None
+        self.gitlab_service: GitLabService | None = None
+        self.gitlab_project_id: int | None = None
+        self.gitlab_user_profile: dict[str, object] | None = None
+        self.gitlab_access_level: int = 0
+        self.gitlab_merge_requests: dict[int, dict[str, object]] = {}
+        self.selected_mr_iid: int | None = None
 
         self.repo_path_var = tk.StringVar(value=config.default_repo_path)
         self.branch_var = tk.StringVar(value="")
@@ -57,6 +65,14 @@ class ReviewerApp:
         self.gitlab_user_var = tk.StringVar(value=config.gitlab_username or "oauth2")
         self.gitlab_token_var = tk.StringVar(value="")
         self.token_status_var = tk.StringVar(value="GitLab token: not set")
+        self.gitlab_url_var = tk.StringVar(value=config.gitlab_base_url)
+        self.gitlab_project_var = tk.StringVar(value=config.gitlab_project_path)
+        self.gitlab_login_status_var = tk.StringVar(value="GitLab API: not connected")
+        self.gitlab_identity_var = tk.StringVar(value="Identity: n/a")
+        self.gitlab_role_var = tk.StringVar(value="Role: n/a")
+        self.gitlab_mr_status_var = tk.StringVar(value="Merge requests: not loaded")
+        self.gitlab_mr_detail_var = tk.StringVar(value="No merge request selected")
+        self.gitlab_only_my_reviews_var = tk.BooleanVar(value=True)
         self.search_var = tk.StringVar(value="")
         self.ticket_var = tk.StringVar(value="")
         self.release_id_var = tk.StringVar(value="")
@@ -133,13 +149,31 @@ class ReviewerApp:
             pady=(6, 0),
         )
 
+        ttk.Label(top, text="GitLab URL:").grid(row=3, column=0, sticky="w", pady=(6, 0))
+        self.gitlab_url_entry = ttk.Entry(top, textvariable=self.gitlab_url_var)
+        self.gitlab_url_entry.grid(row=3, column=1, sticky="ew", padx=(6, 6), pady=(6, 0))
+        ttk.Label(top, text="Project:").grid(row=3, column=2, sticky="e", pady=(6, 0))
+        self.gitlab_project_entry = ttk.Entry(top, textvariable=self.gitlab_project_var)
+        self.gitlab_project_entry.grid(row=3, column=3, sticky="ew", padx=(6, 6), pady=(6, 0))
+        self.gitlab_connect_button = ttk.Button(top, text="Connect GitLab", command=self.connect_gitlab)
+        self.gitlab_connect_button.grid(row=3, column=4, padx=(0, 8), pady=(6, 0))
+        ttk.Label(top, textvariable=self.gitlab_login_status_var).grid(
+            row=3,
+            column=5,
+            columnspan=5,
+            sticky="w",
+            pady=(6, 0),
+        )
+
         self.main_tabs = ttk.Notebook(self.root)
         self.main_tabs.grid(row=1, column=0, sticky="nsew", padx=8, pady=(0, 8))
 
         review_tab = ttk.Frame(self.main_tabs)
+        gitlab_tab = ttk.Frame(self.main_tabs)
         release_tab = ttk.Frame(self.main_tabs)
         self.logs_tab = ttk.Frame(self.main_tabs)
         self.main_tabs.add(review_tab, text="Review")
+        self.main_tabs.add(gitlab_tab, text="GitLab")
         self.main_tabs.add(release_tab, text="Release")
         self.main_tabs.add(self.logs_tab, text="Logs")
 
@@ -233,6 +267,83 @@ class ReviewerApp:
         self.diff_text = ScrolledText(right, wrap="none", height=9, state="disabled")
         self.diff_text.grid(row=4, column=0, sticky="nsew")
 
+        gitlab_tab.columnconfigure(0, weight=2)
+        gitlab_tab.columnconfigure(1, weight=3)
+        gitlab_tab.rowconfigure(1, weight=1)
+
+        gitlab_session = ttk.LabelFrame(gitlab_tab, text="GitLab Session", padding=8)
+        gitlab_session.grid(row=0, column=0, columnspan=2, sticky="ew", pady=(0, 6))
+        gitlab_session.columnconfigure(4, weight=1)
+
+        ttk.Label(gitlab_session, textvariable=self.gitlab_identity_var).grid(row=0, column=0, sticky="w")
+        ttk.Label(gitlab_session, textvariable=self.gitlab_role_var).grid(row=0, column=1, sticky="w", padx=(12, 0))
+        ttk.Checkbutton(
+            gitlab_session,
+            text="Only MRs assigned to me",
+            variable=self.gitlab_only_my_reviews_var,
+            command=self.refresh_gitlab_merge_requests,
+        ).grid(row=0, column=2, sticky="w", padx=(12, 0))
+        self.refresh_gitlab_mrs_button = ttk.Button(
+            gitlab_session,
+            text="Load Merge Requests",
+            command=self.refresh_gitlab_merge_requests,
+        )
+        self.refresh_gitlab_mrs_button.grid(row=0, column=3, sticky="w", padx=(8, 0))
+        ttk.Label(gitlab_session, textvariable=self.gitlab_mr_status_var).grid(row=0, column=4, sticky="e")
+
+        mr_left = ttk.LabelFrame(gitlab_tab, text="Open Merge Requests", padding=8)
+        mr_left.grid(row=1, column=0, sticky="nsew", padx=(0, 6))
+        mr_left.columnconfigure(0, weight=1)
+        mr_left.rowconfigure(0, weight=1)
+
+        self.gitlab_mr_tree = ttk.Treeview(
+            mr_left,
+            columns=("author", "target", "approved"),
+            show="tree headings",
+            selectmode="browse",
+        )
+        self.gitlab_mr_tree.heading("#0", text="IID / Title")
+        self.gitlab_mr_tree.heading("author", text="Author")
+        self.gitlab_mr_tree.heading("target", text="Target")
+        self.gitlab_mr_tree.heading("approved", text="Approved")
+        self.gitlab_mr_tree.column("#0", width=420, anchor="w")
+        self.gitlab_mr_tree.column("author", width=140, anchor="w")
+        self.gitlab_mr_tree.column("target", width=120, anchor="w")
+        self.gitlab_mr_tree.column("approved", width=90, anchor="center")
+        self.gitlab_mr_tree.grid(row=0, column=0, sticky="nsew")
+
+        mr_scroll = ttk.Scrollbar(mr_left, orient="vertical", command=self.gitlab_mr_tree.yview)
+        mr_scroll.grid(row=0, column=1, sticky="ns")
+        self.gitlab_mr_tree.configure(yscrollcommand=mr_scroll.set)
+
+        mr_right = ttk.LabelFrame(gitlab_tab, text="Selected Merge Request", padding=8)
+        mr_right.grid(row=1, column=1, sticky="nsew")
+        mr_right.columnconfigure(0, weight=1)
+        mr_right.rowconfigure(2, weight=1)
+
+        ttk.Label(mr_right, textvariable=self.gitlab_mr_detail_var, wraplength=700, justify="left").grid(
+            row=0,
+            column=0,
+            sticky="ew",
+        )
+
+        buttons = ttk.Frame(mr_right)
+        buttons.grid(row=1, column=0, sticky="ew", pady=(8, 6))
+        buttons.columnconfigure(6, weight=1)
+
+        self.gitlab_approve_button = ttk.Button(buttons, text="Approve MR", command=self.approve_selected_mr)
+        self.gitlab_approve_button.grid(row=0, column=0, padx=(0, 4))
+        self.gitlab_unapprove_button = ttk.Button(buttons, text="Remove Approval", command=self.unapprove_selected_mr)
+        self.gitlab_unapprove_button.grid(row=0, column=1, padx=(0, 4))
+        self.gitlab_open_button = ttk.Button(buttons, text="Open In Browser", command=self.open_selected_mr_in_browser)
+        self.gitlab_open_button.grid(row=0, column=2, padx=(0, 4))
+        ttk.Label(buttons, text="Comment / Request Changes:").grid(row=0, column=3, padx=(8, 4), sticky="e")
+        self.gitlab_send_note_button = ttk.Button(buttons, text="Send Note", command=self.send_mr_note)
+        self.gitlab_send_note_button.grid(row=0, column=4, padx=(0, 4))
+
+        self.gitlab_note_text = ScrolledText(mr_right, wrap="word", height=10)
+        self.gitlab_note_text.grid(row=2, column=0, sticky="nsew")
+
         release_tab.columnconfigure(0, weight=1)
         release_tab.rowconfigure(0, weight=1)
 
@@ -306,6 +417,9 @@ class ReviewerApp:
         self.notes_text.bind("<KeyRelease>", lambda _e: self.update_action_states())
         self.gitlab_user_entry.bind("<Return>", lambda _e: self.apply_gitlab_auth())
         self.gitlab_token_entry.bind("<Return>", lambda _e: self.apply_gitlab_auth())
+        self.gitlab_url_entry.bind("<Return>", lambda _e: self.connect_gitlab())
+        self.gitlab_project_entry.bind("<Return>", lambda _e: self.connect_gitlab())
+        self.gitlab_mr_tree.bind("<<TreeviewSelect>>", self.on_select_merge_request)
 
     def now(self) -> str:
         return dt.datetime.now().strftime("%Y-%m-%d %H:%M:%S")
@@ -372,6 +486,12 @@ class ReviewerApp:
         self.log(f"Git status: {self.service.git_status_summary()}")
         self.log(f"Selected path: {self.selected_path or '(none)'}")
         self.log(f"Base ref: {self.base_ref}")
+        self.log(
+            f"GitLab connected={self.gitlab_service is not None and self.gitlab_project_id is not None} "
+            f"project_id={self.gitlab_project_id or 0} "
+            f"role={self.gitlab_role_label(self.gitlab_access_level)} "
+            f"selected_mr={self.selected_mr_iid or 0}"
+        )
         changed = self.service.changed_review_files(self.base_ref)
         if changed:
             preview = ", ".join(changed[:20])
@@ -425,6 +545,335 @@ class ReviewerApp:
             self.capture_runtime_snapshot("command failed")
             self.log(self.diagnostics_hint())
 
+    def current_gitlab_token(self) -> str:
+        token = self.gitlab_token_var.get().strip()
+        if token:
+            return token
+        return os.environ.get("GITLAB_TOKEN", "").strip()
+
+    def ensure_gitlab_service(self) -> GitLabService | None:
+        base_url = self.gitlab_url_var.get().strip()
+        project_ref = self.gitlab_project_var.get().strip()
+        token = self.current_gitlab_token()
+
+        if not base_url:
+            messagebox.showwarning("GitLab", "GitLab URL is required.")
+            return None
+        if not project_ref:
+            messagebox.showwarning("GitLab", "GitLab project path or project ID is required.")
+            return None
+        if not token:
+            messagebox.showwarning("GitLab", "GitLab token is required.")
+            return None
+
+        self.gitlab_service = GitLabService(base_url=base_url, token=token, project_ref=project_ref)
+        return self.gitlab_service
+
+    def gitlab_role_label(self, access_level: int) -> str:
+        mapping = {
+            10: "Guest",
+            20: "Reporter",
+            30: "Developer",
+            40: "Maintainer",
+            50: "Owner",
+        }
+        return mapping.get(access_level, f"Unknown ({access_level})")
+
+    def log_gitlab_api(self, action: str, result: GitLabApiResult) -> None:
+        status = result.status_code if result.status_code else "n/a"
+        outcome = "OK" if result.ok else "FAIL"
+        self.log(f"GITLAB {action}: {outcome} (status={status})")
+        if result.error:
+            self.log(f"GITLAB {action} error: {result.error}")
+        if not result.ok and self.main_tabs is not None and self.logs_tab is not None:
+            self.main_tabs.select(self.logs_tab)
+
+    def initialize_gitlab_from_remote(self) -> None:
+        if not self.service:
+            return
+
+        remote = self.service.git_origin_url()
+        if not remote:
+            return
+
+        derived_url, derived_project = GitLabService.derive_from_remote(remote)
+
+        changed = False
+        if not self.gitlab_url_var.get().strip() and derived_url:
+            self.gitlab_url_var.set(derived_url)
+            changed = True
+        if not self.gitlab_project_var.get().strip() and derived_project:
+            self.gitlab_project_var.set(derived_project)
+            changed = True
+
+        if changed:
+            self.config.gitlab_base_url = self.gitlab_url_var.get().strip()
+            self.config.gitlab_project_path = self.gitlab_project_var.get().strip()
+            save_config(self.config)
+            self.log(f"Derived GitLab target from origin remote: {self.gitlab_url_var.get()} / {self.gitlab_project_var.get()}")
+
+    def connect_gitlab(self) -> None:
+        if not self.service:
+            messagebox.showwarning("GitLab", "Open a repository first.")
+            return
+
+        api = self.ensure_gitlab_service()
+        if not api:
+            return
+
+        who = api.whoami()
+        self.log_gitlab_api("whoami", who)
+        if not who.ok or not isinstance(who.payload, dict):
+            messagebox.showerror("GitLab Login", f"GitLab login failed.\n\n{who.error or 'Unknown error'}")
+            self.gitlab_login_status_var.set("GitLab API: login failed")
+            self.gitlab_identity_var.set("Identity: n/a")
+            self.gitlab_role_var.set("Role: n/a")
+            self.gitlab_project_id = None
+            self.gitlab_user_profile = None
+            self.gitlab_access_level = 0
+            self.update_action_states()
+            return
+
+        project = api.get_project()
+        self.log_gitlab_api("get_project", project)
+        if not project.ok or not isinstance(project.payload, dict):
+            messagebox.showerror("GitLab Project", f"Could not load project.\n\n{project.error or 'Unknown error'}")
+            self.gitlab_login_status_var.set("GitLab API: project lookup failed")
+            self.gitlab_project_id = None
+            self.gitlab_access_level = 0
+            self.update_action_states()
+            return
+
+        self.gitlab_user_profile = who.payload
+        project_payload = project.payload
+        self.gitlab_project_id = int(project_payload.get("id", 0))
+
+        username = str(who.payload.get("username", "")).strip()
+        name = str(who.payload.get("name", "")).strip()
+
+        access_level = 0
+        user_id = who.payload.get("id")
+        if isinstance(user_id, int) and self.gitlab_project_id:
+            member = api.get_member(user_id=user_id, project_id=self.gitlab_project_id)
+            self.log_gitlab_api("get_member", member)
+            if member.ok and isinstance(member.payload, dict):
+                access_level = int(member.payload.get("access_level", 0))
+        self.gitlab_access_level = access_level
+
+        self.gitlab_identity_var.set(f"Identity: {name} ({username})")
+        self.gitlab_role_var.set(f"Role: {self.gitlab_role_label(access_level)}")
+        self.gitlab_login_status_var.set(
+            f"GitLab API: connected to project {project_payload.get('path_with_namespace', self.gitlab_project_var.get())}"
+        )
+
+        self.config.gitlab_base_url = self.gitlab_url_var.get().strip()
+        self.config.gitlab_project_path = self.gitlab_project_var.get().strip()
+        save_config(self.config)
+
+        self.log("GitLab connection established.")
+        self.refresh_gitlab_merge_requests()
+        self.update_action_states()
+
+    def refresh_gitlab_merge_requests(self) -> None:
+        if not self.gitlab_service or not self.gitlab_project_id:
+            return
+
+        reviewer_username = ""
+        if self.gitlab_only_my_reviews_var.get() and self.gitlab_user_profile:
+            reviewer_username = str(self.gitlab_user_profile.get("username", "")).strip()
+
+        result = self.gitlab_service.list_merge_requests(
+            project_id=self.gitlab_project_id,
+            reviewer_username=reviewer_username,
+        )
+        self.log_gitlab_api("list_merge_requests", result)
+        if not result.ok or not isinstance(result.payload, list):
+            messagebox.showerror("GitLab MRs", f"Failed to load merge requests.\n\n{result.error or 'Unknown error'}")
+            self.gitlab_mr_status_var.set("Merge requests: load failed")
+            self.update_action_states()
+            return
+
+        self.gitlab_merge_requests.clear()
+        self.selected_mr_iid = None
+        self.gitlab_mr_detail_var.set("No merge request selected")
+        self.gitlab_note_text.configure(state="normal")
+        self.gitlab_note_text.delete("1.0", "end")
+
+        for item in self.gitlab_mr_tree.get_children():
+            self.gitlab_mr_tree.delete(item)
+
+        for entry in result.payload:
+            if not isinstance(entry, dict):
+                continue
+            iid = int(entry.get("iid", 0))
+            if iid <= 0:
+                continue
+
+            title = str(entry.get("title", "")).strip()
+            author = ""
+            author_payload = entry.get("author")
+            if isinstance(author_payload, dict):
+                author = str(author_payload.get("username", "")).strip()
+            target = str(entry.get("target_branch", "")).strip()
+            approved_text = "yes" if bool(entry.get("approved_by")) else "no"
+            self.gitlab_merge_requests[iid] = entry
+            self.gitlab_mr_tree.insert(
+                "",
+                "end",
+                iid=str(iid),
+                text=f"!{iid} {title}",
+                values=(author, target, approved_text),
+            )
+
+        count = len(self.gitlab_merge_requests)
+        if reviewer_username:
+            self.gitlab_mr_status_var.set(f"Merge requests loaded: {count} (filtered to reviewer {reviewer_username})")
+        else:
+            self.gitlab_mr_status_var.set(f"Merge requests loaded: {count}")
+
+        self.update_action_states()
+
+    def selected_mr_required(self) -> int | None:
+        if self.selected_mr_iid is None:
+            messagebox.showwarning("GitLab MR", "Select a merge request first.")
+            return None
+        return self.selected_mr_iid
+
+    def on_select_merge_request(self, _event: object = None) -> None:
+        selection = self.gitlab_mr_tree.selection()
+        if not selection:
+            self.selected_mr_iid = None
+            self.gitlab_mr_detail_var.set("No merge request selected")
+            self.update_action_states()
+            return
+
+        try:
+            iid = int(selection[0])
+        except ValueError:
+            self.selected_mr_iid = None
+            self.gitlab_mr_detail_var.set("No merge request selected")
+            self.update_action_states()
+            return
+
+        self.selected_mr_iid = iid
+        self.load_merge_request_details(iid)
+        self.update_action_states()
+
+    def load_merge_request_details(self, mr_iid: int) -> None:
+        if not self.gitlab_service or not self.gitlab_project_id:
+            return
+
+        result = self.gitlab_service.get_merge_request(self.gitlab_project_id, mr_iid)
+        self.log_gitlab_api("get_merge_request", result)
+        if not result.ok or not isinstance(result.payload, dict):
+            self.gitlab_mr_detail_var.set(f"!{mr_iid} (detail unavailable): {result.error or 'Unknown error'}")
+            return
+
+        payload = result.payload
+        self.gitlab_merge_requests[mr_iid] = payload
+        title = str(payload.get("title", ""))
+        state = str(payload.get("state", ""))
+        source = str(payload.get("source_branch", ""))
+        target = str(payload.get("target_branch", ""))
+        web_url = str(payload.get("web_url", ""))
+        author = ""
+        author_payload = payload.get("author")
+        if isinstance(author_payload, dict):
+            author = str(author_payload.get("username", ""))
+
+        self.gitlab_mr_detail_var.set(
+            f"!{mr_iid} [{state}] by {author}\n"
+            f"{title}\n"
+            f"{source} -> {target}\n"
+            f"{web_url}"
+        )
+
+    def approve_selected_mr(self) -> None:
+        if not self.gitlab_service or not self.gitlab_project_id:
+            messagebox.showwarning("GitLab MR", "Connect to GitLab first.")
+            return
+        if self.gitlab_access_level < 30:
+            messagebox.showwarning(
+                "GitLab MR",
+                "Current GitLab role is below Developer. Reviewer approval typically requires Developer or higher.",
+            )
+            return
+
+        mr_iid = self.selected_mr_required()
+        if mr_iid is None:
+            return
+
+        result = self.gitlab_service.approve_merge_request(self.gitlab_project_id, mr_iid)
+        self.log_gitlab_api("approve_merge_request", result)
+        if result.ok:
+            messagebox.showinfo("GitLab MR", f"Merge request !{mr_iid} approved.")
+            self.load_merge_request_details(mr_iid)
+            self.refresh_gitlab_merge_requests()
+        else:
+            messagebox.showerror("GitLab MR", f"Approval failed.\n\n{result.error or 'Unknown error'}")
+
+    def unapprove_selected_mr(self) -> None:
+        if not self.gitlab_service or not self.gitlab_project_id:
+            messagebox.showwarning("GitLab MR", "Connect to GitLab first.")
+            return
+
+        mr_iid = self.selected_mr_required()
+        if mr_iid is None:
+            return
+
+        if not messagebox.askyesno("GitLab MR", f"Remove your approval from !{mr_iid}?"):
+            return
+
+        result = self.gitlab_service.unapprove_merge_request(self.gitlab_project_id, mr_iid)
+        self.log_gitlab_api("unapprove_merge_request", result)
+        if result.ok:
+            messagebox.showinfo("GitLab MR", f"Approval removed from merge request !{mr_iid}.")
+            self.load_merge_request_details(mr_iid)
+            self.refresh_gitlab_merge_requests()
+        else:
+            messagebox.showerror("GitLab MR", f"Remove approval failed.\n\n{result.error or 'Unknown error'}")
+
+    def send_mr_note(self) -> None:
+        if not self.gitlab_service or not self.gitlab_project_id:
+            messagebox.showwarning("GitLab MR", "Connect to GitLab first.")
+            return
+
+        mr_iid = self.selected_mr_required()
+        if mr_iid is None:
+            return
+
+        note = self.gitlab_note_text.get("1.0", "end-1c").strip()
+        if not note:
+            messagebox.showwarning("GitLab MR", "Enter a note/comment first.")
+            return
+
+        result = self.gitlab_service.add_merge_request_note(self.gitlab_project_id, mr_iid, note)
+        self.log_gitlab_api("add_merge_request_note", result)
+        if result.ok:
+            messagebox.showinfo("GitLab MR", "Note posted to merge request.")
+            self.gitlab_note_text.configure(state="normal")
+            self.gitlab_note_text.delete("1.0", "end")
+        else:
+            messagebox.showerror("GitLab MR", f"Failed to post note.\n\n{result.error or 'Unknown error'}")
+
+    def open_selected_mr_in_browser(self) -> None:
+        mr_iid = self.selected_mr_required()
+        if mr_iid is None:
+            return
+
+        payload = self.gitlab_merge_requests.get(mr_iid, {})
+        web_url = str(payload.get("web_url", "")).strip()
+        if not web_url:
+            messagebox.showwarning("GitLab MR", "Web URL not available for this merge request.")
+            return
+
+        try:
+            webbrowser.open(web_url)
+            self.log(f"Opened merge request URL: {web_url}")
+        except Exception as exc:
+            self.log(f"Failed to open MR URL: {exc}")
+            messagebox.showerror("GitLab MR", f"Could not open browser:\n{exc}")
+
     def apply_gitlab_auth(self, log_notice: bool = True) -> None:
         if not self.service:
             return
@@ -432,6 +881,23 @@ class ReviewerApp:
         username = self.gitlab_user_var.get().strip() or "oauth2"
         token = self.gitlab_token_var.get().strip()
         self.service.set_gitlab_auth(username, token)
+        self.gitlab_service = None
+        self.gitlab_project_id = None
+        self.gitlab_user_profile = None
+        self.gitlab_access_level = 0
+        self.gitlab_login_status_var.set("GitLab API: not connected")
+        self.gitlab_identity_var.set("Identity: n/a")
+        self.gitlab_role_var.set("Role: n/a")
+        self.gitlab_mr_status_var.set("Merge requests: not loaded")
+        self.selected_mr_iid = None
+        self.gitlab_merge_requests.clear()
+        self.gitlab_mr_detail_var.set("No merge request selected")
+        if hasattr(self, "gitlab_mr_tree"):
+            for item in self.gitlab_mr_tree.get_children():
+                self.gitlab_mr_tree.delete(item)
+        if hasattr(self, "gitlab_note_text"):
+            self.gitlab_note_text.configure(state="normal")
+            self.gitlab_note_text.delete("1.0", "end")
 
         self.config.gitlab_username = username
         save_config(self.config)
@@ -533,10 +999,18 @@ class ReviewerApp:
         self.scripts = service.detect_scripts()
         self.init_session_log()
         self.apply_gitlab_auth(log_notice=False)
+        self.initialize_gitlab_from_remote()
 
         self.validation_state.clear()
         self.file_items.clear()
         self.selected_path = None
+        self.gitlab_merge_requests.clear()
+        self.selected_mr_iid = None
+        for item in self.gitlab_mr_tree.get_children():
+            self.gitlab_mr_tree.delete(item)
+        self.gitlab_mr_detail_var.set("No merge request selected")
+        self.gitlab_note_text.configure(state="normal")
+        self.gitlab_note_text.delete("1.0", "end")
 
         self.config.default_repo_path = str(repo_path)
         save_config(self.config)
@@ -1042,6 +1516,7 @@ class ReviewerApp:
         has_service = self.service is not None
         has_file = self.selected_path is not None
         self.apply_token_button.configure(state="normal" if has_service else "disabled")
+        self.gitlab_connect_button.configure(state="normal" if has_service else "disabled")
         self.open_log_button.configure(state="normal" if has_service else "disabled")
         self.export_log_button.configure(state="normal")
 
@@ -1071,11 +1546,25 @@ class ReviewerApp:
         self.publish_button.configure(state="normal" if publish_on else "disabled")
         self.publish_dry_button.configure(state="normal" if publish_on else "disabled")
 
+        gitlab_connected = self.gitlab_service is not None and self.gitlab_project_id is not None
+        self.refresh_gitlab_mrs_button.configure(state="normal" if gitlab_connected else "disabled")
+
+        has_selected_mr = self.selected_mr_iid is not None
+        state_mr = "normal" if (gitlab_connected and has_selected_mr) else "disabled"
+        approval_state = "normal" if (state_mr == "normal" and self.gitlab_access_level >= 30) else "disabled"
+        self.gitlab_approve_button.configure(state=approval_state)
+        self.gitlab_unapprove_button.configure(state=approval_state)
+        self.gitlab_open_button.configure(state=state_mr)
+        self.gitlab_send_note_button.configure(state=state_mr)
+        self.gitlab_note_text.configure(state="normal" if state_mr == "normal" else "disabled")
+
     def on_close(self) -> None:
         self.config.default_repo_path = self.repo_path_var.get().strip()
         self.config.default_base_ref = self.base_ref
         self.config.ignore_comments_by_default = self.ignore_comments_var.get()
         self.config.gitlab_username = self.gitlab_user_var.get().strip() or "oauth2"
+        self.config.gitlab_base_url = self.gitlab_url_var.get().strip()
+        self.config.gitlab_project_path = self.gitlab_project_var.get().strip()
         save_config(self.config)
         self.root.destroy()
 

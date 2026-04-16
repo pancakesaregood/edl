@@ -14,6 +14,8 @@ class ReviewerConfig:
     default_base_ref: str = "origin/main"
     ignore_comments_by_default: bool = True
     gitlab_username: str = "oauth2"
+    gitlab_base_url: str = ""
+    gitlab_project_path: str = ""
 
 
 def config_path() -> Path:
@@ -36,6 +38,8 @@ def load_config() -> ReviewerConfig:
         default_base_ref=str(data.get("default_base_ref", "origin/main")),
         ignore_comments_by_default=bool(data.get("ignore_comments_by_default", True)),
         gitlab_username=str(data.get("gitlab_username", "oauth2")),
+        gitlab_base_url=str(data.get("gitlab_base_url", "")),
+        gitlab_project_path=str(data.get("gitlab_project_path", "")),
     )
 
 
@@ -46,5 +50,7 @@ def save_config(config: ReviewerConfig) -> None:
         "default_base_ref": config.default_base_ref,
         "ignore_comments_by_default": config.ignore_comments_by_default,
         "gitlab_username": config.gitlab_username,
+        "gitlab_base_url": config.gitlab_base_url,
+        "gitlab_project_path": config.gitlab_project_path,
     }
     config_path().write_text(json.dumps(payload, indent=2), encoding="utf-8")
