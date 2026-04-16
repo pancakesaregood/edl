@@ -1,4 +1,0 @@
-# Demo phishing blocklist entries (safe placeholders)
-phish-login.example.invalid
-198.51.100.77
-https://phishing.example.invalid/reset

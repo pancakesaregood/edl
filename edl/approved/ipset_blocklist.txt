@@ -1,0 +1,4 @@
+﻿# Safe placeholder IP/CIDR blocklist entries
+198.51.100.0/24
+203.0.113.64/27
+192.0.2.45

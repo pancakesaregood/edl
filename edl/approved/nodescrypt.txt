@@ -1,0 +1,4 @@
+﻿# Safe placeholder nodescrypt entries
+node-a.nodescrypt.example.invalid
+node-b.nodescrypt.example.invalid
+https://nodescrypt.example.invalid/seed

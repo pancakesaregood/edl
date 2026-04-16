@@ -2,6 +2,22 @@
 
 This standard keeps list files predictable and easy to validate/review.
 
+## Current Fixed List IDs
+
+The current production list IDs are maintained exactly as below for compatibility:
+
+- `Corp_url_whitelist.txt`
+- `domainblocklist.txt`
+- `greenspace.txt`
+- `internet_only_whitelist.txt`
+- `ipset_blocklist.txt`
+- `skype_teams.txt`
+- `nodescrypt.txt`
+- `ip_blocklist.txt`
+- `url_blocklist.txt`
+
+These are valid even if they do not follow the preferred new-list naming pattern.
+
 ## File Name Pattern
 
 Preferred pattern:
@@ -21,10 +37,10 @@ Where:
 
 Examples:
 
-- `blocklist-malware.txt`
-- `blocklist-phishing-domain.txt`
-- `allowlist-vendors-url.txt`
-- `allowlist-partners-ip.txt`
+- `domainblocklist.txt`
+- `url_blocklist.txt`
+- `Corp_url_whitelist.txt`
+- `ip_blocklist.txt`
 
 ## Character Rules
 

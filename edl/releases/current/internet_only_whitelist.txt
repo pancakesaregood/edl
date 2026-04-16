@@ -1,0 +1,4 @@
+﻿# Safe placeholder internet-only whitelist entries
+internet-allow.example.invalid
+services.internet.example.invalid
+https://internet-only.example.invalid/update

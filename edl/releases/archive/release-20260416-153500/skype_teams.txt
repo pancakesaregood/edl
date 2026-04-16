@@ -1,0 +1,4 @@
+﻿# Safe placeholder collaboration service endpoints
+teams-gateway.example.invalid
+skype-signaling.example.invalid
+https://media-cdn.example.invalid/teams

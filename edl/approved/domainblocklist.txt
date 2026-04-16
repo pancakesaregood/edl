@@ -1,0 +1,4 @@
+﻿# Safe placeholder blocked domains
+ads-tracker.example.invalid
+phish-gateway.example.invalid
+fake-login.example.invalid

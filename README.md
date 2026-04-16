@@ -1,6 +1,6 @@
 ﻿# Firewall EDL Controlled Content Pipeline (MVP)
 
-This repository provides a simple, auditable workflow for managing firewall External Dynamic List (EDL) text files using Git and PowerShell.
+This repository provides a simple, auditable workflow for managing firewall External Dynamic List (EDL) text files using GitLab and PowerShell.
 
 ## Objectives
 
@@ -29,13 +29,27 @@ scripts/              # operational automation scripts
 - Operator:
   - edits only `edl/working/*`
   - uses checkout/checkin scripts
-  - opens PR for review
+  - opens GitLab MR for review
 - Reviewer:
   - reviews changes and validation results
   - approves promotion from `working` to `approved`
 - Release Manager:
   - builds release from `edl/approved`
   - publishes selected release to ingest location
+
+## Maintained Lists
+
+The following list files are maintained and support checkout/checkin workflow:
+
+- `Corp_url_whitelist.txt`
+- `domainblocklist.txt`
+- `greenspace.txt`
+- `internet_only_whitelist.txt`
+- `ipset_blocklist.txt`
+- `skype_teams.txt`
+- `nodescrypt.txt`
+- `ip_blocklist.txt`
+- `url_blocklist.txt`
 
 ## Script Summary
 
@@ -60,29 +74,30 @@ scripts/              # operational automation scripts
 - Firewall ingest location must consume only published release output.
 - Do not configure firewall ingest to pull from `edl/working`.
 - Do not configure firewall ingest to pull from `edl/approved`.
-- Use pull requests / merge requests for approvals.
+- Use GitLab merge requests for approvals.
 
 ## Operator Quickstart
 
 ```powershell
 # 1) Create a branch
-git checkout -b feature/CHG-1234-malware-edl-update
+git checkout -b feature/CHG-1234-domainblocklist-update
 
 # 2) Checkout a working file (creates lock)
-./scripts/checkout.ps1 -FileName blocklist-malware.txt -Ticket CHG-1234
+./scripts/checkout.ps1 -FileName domainblocklist.txt -Ticket CHG-1234
 
 # 3) Edit file under edl/working/
 # (use your editor)
 
 # 4) Validate file
-./scripts/validate.ps1 -Path edl/working/blocklist-malware.txt -IgnoreComments
+./scripts/validate.ps1 -Path edl/working/domainblocklist.txt -IgnoreComments
 
 # 5) Check in file (validates + removes lock)
-./scripts/checkin.ps1 -FileName blocklist-malware.txt -Ticket CHG-1234 -IgnoreComments
+./scripts/checkin.ps1 -FileName domainblocklist.txt -Ticket CHG-1234 -IgnoreComments
 
-# 6) Commit and open PR
+# 6) Commit and open GitLab MR
 git add .
-git commit -m "feat(edl): CHG-1234 update malware blocklist"
+git commit -m "feat(edl): CHG-1234 update domainblocklist"
+git push -u origin feature/CHG-1234-domainblocklist-update
 ```
 
-See [docs/process.md](docs/process.md) for full workflow, branch strategy, PR checklist, release process, and reviewer steps.
+See [docs/process.md](docs/process.md) for full workflow, branch strategy, MR checklist, release process, and reviewer steps.

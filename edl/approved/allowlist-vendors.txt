@@ -1,5 +1,0 @@
-# Demo vendor allowlist entries (safe placeholders)
-updates.vendor-example.invalid
-downloads.vendor-example.invalid
-https://cdn.vendor-example.invalid/packages
-203.0.113.200
